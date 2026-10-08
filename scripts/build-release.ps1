@@ -39,7 +39,7 @@ Invoke-Checked 'cargo' @('build','--release','--locked')
 $metadata=& cargo metadata --no-deps --format-version 1 | ConvertFrom-Json
 $binary=Join-Path $metadata.target_directory 'release/nanfeng-codex-quota.exe'
 Sign-Verified $binary
-$output=[IO.Path]::GetFullPath((Join-Path $root $OutDir))
+$output=if([IO.Path]::IsPathRooted($OutDir)){[IO.Path]::GetFullPath($OutDir)}else{[IO.Path]::GetFullPath((Join-Path $root $OutDir))}
 New-Item -ItemType Directory -Path $output -Force | Out-Null
 Invoke-Checked $Compiler @('/Qp',"/DAppVersion=$version","/DAppBinary=$binary","/DReleaseOutput=$output",'packaging/windows.iss')
 $setup=Join-Path $output "Nanfeng-Codex-Quota-Windows-v$version-Setup.exe"

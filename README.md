@@ -5,15 +5,15 @@
 [下载 Windows 安装包](https://github.com/nanzhufeng/NanfengCodexQuota-Windows/releases/latest)
 
 ![额度状态与设置](docs/images/settings.png)
-![功能审阅](docs/images/review.png)
+![关于](docs/images/about.png)
 
-预览来自 v0.1.2 在 Windows 上的真实运行界面。
+预览来自 v0.1.3 在 Windows 上的真实运行界面。
 
 - 显示周剩余额度；接口提供五小时窗口时，在设置中同步列出。
 - 连接失败保留最近成功值，并明确显示异常或过期状态。
 - 默认每 60 秒刷新，支持手动刷新、失败退避和查询取消。
 - 可拖动、保存位置、置顶、隐藏找回；支持单实例及可选开机启动。
-- 中文设置、功能审阅、独立应用图标；关于页显示实际构建 Git Commit。
+- 白色仪表式中文设置、独立应用图标；关于页显示实际构建 Git Commit。
 
 ## 安装与使用
 

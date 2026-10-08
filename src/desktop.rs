@@ -19,13 +19,15 @@ use windows_sys::Win32::{
     Graphics::Gdi::*,
     System::{LibraryLoader::GetModuleHandleW, Registry::*, Threading::CreateMutexW},
     UI::{
-        Controls::BST_CHECKED,
+        Controls::{BST_CHECKED, DRAWITEMSTRUCT, MEASUREITEMSTRUCT, ODS_SELECTED},
         HiDpi::*,
         Input::KeyboardAndMouse::{EnableWindow, ReleaseCapture},
         Shell::*,
         WindowsAndMessaging::*,
     },
 };
+
+mod settings_view;
 
 const TITLE: &str = "南枫 Codex 额度";
 const CLASS: &str = "NanfengCodexQuota.Widget.v1";
@@ -43,7 +45,6 @@ const STARTUP: usize = 202;
 const TOP_CHECK: usize = 203;
 const POSITION: usize = 204;
 const T_GENERAL: usize = 301;
-const T_REVIEW: usize = 302;
 const T_ABOUT: usize = 303;
 
 struct App {
@@ -109,6 +110,7 @@ pub fn run() -> Result<()> {
             return Ok(());
         }
         SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+        let _graphics = settings_view::GraphicsRuntime::start()?;
         let path = Config::path()?;
         let config = Config::load(&path)?;
         let font = make_font(14, 400, 96);
@@ -128,7 +130,7 @@ pub fn run() -> Result<()> {
             controls: vec![],
             font,
             title_font,
-            background: CreateSolidBrush(rgb(246, 248, 250)),
+            background: CreateSolidBrush(rgb(255, 255, 255)),
             tray: zeroed(),
             taskbar_created: RegisterWindowMessageW(wide("TaskbarCreated").as_ptr()),
             closing: false,
@@ -745,13 +747,13 @@ unsafe fn open_settings(app: &mut App) {
         return;
     }
     let dpi = GetDpiForWindow(app.widget).max(96);
-    let width = mul_div(560, dpi as i32, 96);
-    let height = mul_div(560, dpi as i32, 96);
+    let width = mul_div(1080, dpi as i32, 96);
+    let height = mul_div(750, dpi as i32, 96);
     app.settings = CreateWindowExW(
         WS_EX_APPWINDOW | WS_EX_CONTROLPARENT,
         wide(SETTINGS).as_ptr(),
         wide("南枫 Codex 额度 · 设置").as_ptr(),
-        WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX,
+        WS_OVERLAPPEDWINDOW,
         CW_USEDEFAULT,
         CW_USEDEFAULT,
         width,
@@ -761,216 +763,16 @@ unsafe fn open_settings(app: &mut App) {
         GetModuleHandleW(null()),
         (app as *mut App).cast(),
     );
+    settings_view::configure_chrome(app.settings);
     rebuild_settings(app);
     ShowWindow(app.settings, SW_SHOW);
     SetForegroundWindow(app.settings);
 }
-#[allow(clippy::too_many_arguments)] // Mirrors Win32 control placement with an explicit rectangle.
-unsafe fn control(
-    app: &mut App,
-    class: &str,
-    text: &str,
-    id: usize,
-    style: u32,
-    x: i32,
-    y: i32,
-    w: i32,
-    h: i32,
-) -> HWND {
-    let dpi = GetDpiForWindow(app.settings).max(96);
-    let scale = |v| mul_div(v, dpi as i32, 96);
-    let hwnd = CreateWindowExW(
-        0,
-        wide(class).as_ptr(),
-        wide(text).as_ptr(),
-        WS_CHILD | WS_VISIBLE | style,
-        scale(x),
-        scale(y),
-        scale(w),
-        scale(h),
-        app.settings,
-        id as HMENU,
-        GetModuleHandleW(null()),
-        null(),
-    );
-    SendMessageW(hwnd, WM_SETFONT, app.font as usize, 1);
-    app.controls.push(hwnd);
-    hwnd
-}
 unsafe fn rebuild_settings(app: &mut App) {
-    if app.settings.is_null() {
-        return;
-    }
-    for hwnd in app.controls.drain(..) {
-        DestroyWindow(hwnd);
-    }
-    let dpi = GetDpiForWindow(app.settings).max(96);
-    DeleteObject(app.font);
-    DeleteObject(app.title_font);
-    app.font = make_font(14, 400, dpi);
-    app.title_font = make_font(22, 600, dpi);
-    for (id, text, x) in [
-        (T_GENERAL, "常规", 24),
-        (T_REVIEW, "功能审阅", 196),
-        (T_ABOUT, "关于", 368),
-    ] {
-        control(
-            app,
-            "BUTTON",
-            text,
-            id,
-            WS_TABSTOP | BS_PUSHBUTTON as u32,
-            x,
-            20,
-            148,
-            34,
-        );
-    }
-    match app.page {
-        T_GENERAL => {
-            control(app, "STATIC", "额度状态", 0, 0, 28, 76, 470, 24);
-            control(
-                app,
-                "STATIC",
-                &app.monitor.details(Utc::now(), app.config.interval_secs),
-                400,
-                0,
-                28,
-                106,
-                470,
-                112,
-            );
-            control(app, "STATIC", "刷新间隔", 0, 0, 28, 230, 170, 24);
-            let combo = control(
-                app,
-                "COMBOBOX",
-                "",
-                INTERVAL,
-                WS_TABSTOP | CBS_DROPDOWNLIST as u32 | WS_VSCROLL,
-                204,
-                224,
-                180,
-                200,
-            );
-            for seconds in [30, 60, 120, 300, 600] {
-                SendMessageW(
-                    combo,
-                    CB_ADDSTRING,
-                    0,
-                    wide(&format!("{seconds} 秒")).as_ptr() as isize,
-                );
-            }
-            let index = [30, 60, 120, 300, 600]
-                .iter()
-                .position(|v| *v == app.config.interval_secs)
-                .unwrap_or(1);
-            SendMessageW(combo, CB_SETCURSEL, index, 0);
-            let top = control(
-                app,
-                "BUTTON",
-                "保持悬浮窗置顶",
-                TOP_CHECK,
-                WS_TABSTOP | BS_AUTOCHECKBOX as u32,
-                28,
-                278,
-                420,
-                26,
-            );
-            SendMessageW(top, BM_SETCHECK, usize::from(app.config.always_on_top), 0);
-            let startup = control(
-                app,
-                "BUTTON",
-                "登录 Windows 时启动",
-                STARTUP,
-                WS_TABSTOP | BS_AUTOCHECKBOX as u32,
-                28,
-                316,
-                420,
-                26,
-            );
-            SendMessageW(
-                startup,
-                BM_SETCHECK,
-                usize::from(app.config.start_at_login),
-                0,
-            );
-            control(
-                app,
-                "STATIC",
-                "设置即时生效。拖动圆窗调整位置，右键打开菜单。",
-                0,
-                0,
-                28,
-                365,
-                470,
-                40,
-            );
-            control(
-                app,
-                "BUTTON",
-                "立即刷新",
-                REFRESH,
-                WS_TABSTOP | BS_PUSHBUTTON as u32,
-                28,
-                426,
-                148,
-                36,
-            );
-            control(
-                app,
-                "BUTTON",
-                "找回悬浮窗",
-                POSITION,
-                WS_TABSTOP | BS_PUSHBUTTON as u32,
-                204,
-                426,
-                148,
-                36,
-            );
-        }
-        T_REVIEW => {
-            control(app, "STATIC", "已采用", 0, 0, 28, 80, 470, 26);
-            control(
-                app,
-                "STATIC",
-                "只读额度监控\n复用本机 Codex 登录，不创建对话、不调用模型。\n\n周剩余额度圆窗\n保留常驻圆窗；五小时窗口只在接口提供时列出。\n\n异常与恢复\n保留最近成功值，明确提示连接失败和数据过期。\n\n右键菜单及托盘\n刷新、设置、隐藏和退出均从这里进入。",
-                0,
-                0,
-                28,
-                118,
-                470,
-                290,
-            );
-            control(
-                app,
-                "STATIC",
-                "暂不采用：自动激活、独立登录、上游覆盖更新。\n理由：只读目标明确，减少权限与维护负担。",
-                0,
-                0,
-                28,
-                422,
-                470,
-                56,
-            );
-        }
-        T_ABOUT => {}
-        _ => {}
-    }
-    InvalidateRect(app.settings, null(), 1);
+    settings_view::rebuild(app);
 }
 unsafe fn update_status_control(app: &mut App) {
-    if app.settings.is_null() || app.page != T_GENERAL {
-        return;
-    }
-    let status = GetDlgItem(app.settings, 400);
-    if !status.is_null() {
-        SetWindowTextW(
-            status,
-            wide(&app.monitor.details(Utc::now(), app.config.interval_secs)).as_ptr(),
-        );
-    }
-    let button = GetDlgItem(app.settings, REFRESH as i32);
-    EnableWindow(button, i32::from(!app.monitor.refreshing));
+    settings_view::update(app);
 }
 unsafe fn apply_config(app: &mut App, new: Config) -> bool {
     let old = app.config.clone();
@@ -1012,11 +814,46 @@ unsafe extern "system" fn settings_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPAR
         return DefWindowProcW(hwnd, msg, w, l);
     };
     match msg {
+        WM_MEASUREITEM => {
+            let item = &mut *(l as *mut MEASUREITEMSTRUCT);
+            item.itemHeight = mul_div(36, GetDpiForWindow(hwnd).max(96) as i32, 96) as u32;
+            1
+        }
+        WM_DRAWITEM => {
+            let item = &*(l as *const DRAWITEMSTRUCT);
+            if item.CtlID == INTERVAL as u32 {
+                settings_view::draw_choice(item);
+                return 1;
+            }
+            DefWindowProcW(hwnd, msg, w, l)
+        }
+        WM_SIZE => {
+            if !app.settings.is_null() {
+                settings_view::layout(app);
+            }
+            0
+        }
+        WM_GETMINMAXINFO => {
+            let info = &mut *(l as *mut MINMAXINFO);
+            let dpi = GetDpiForWindow(hwnd).max(96);
+            let mut rect = RECT {
+                left: 0,
+                top: 0,
+                right: mul_div(900, dpi as i32, 96),
+                bottom: mul_div(640, dpi as i32, 96),
+            };
+            AdjustWindowRectExForDpi(&mut rect, WS_OVERLAPPEDWINDOW, 0, WS_EX_APPWINDOW, dpi);
+            info.ptMinTrackSize = POINT {
+                x: rect.right - rect.left,
+                y: rect.bottom - rect.top,
+            };
+            0
+        }
         WM_COMMAND => {
             let id = w & 0xffff;
             let notification = (w >> 16) & 0xffff;
             match id {
-                T_GENERAL | T_REVIEW | T_ABOUT => {
+                T_GENERAL | T_ABOUT => {
                     app.page = id;
                     rebuild_settings(app);
                 }
@@ -1071,9 +908,7 @@ unsafe extern "system" fn settings_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPAR
         WM_PAINT => {
             let mut ps: PAINTSTRUCT = zeroed();
             let dc = BeginPaint(hwnd, &mut ps);
-            if app.page == T_ABOUT {
-                paint_about(app, dc);
-            }
+            settings_view::paint(app, dc);
             EndPaint(hwnd, &ps);
             0
         }
@@ -1102,82 +937,6 @@ unsafe extern "system" fn settings_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPAR
         }
         _ => DefWindowProcW(hwnd, msg, w, l),
     }
-}
-unsafe fn paint_about(app: &App, dc: HDC) {
-    let dpi = GetDpiForWindow(app.settings).max(96);
-    let s = |v| mul_div(v, dpi as i32, 96);
-    let white = CreateSolidBrush(rgb(255, 255, 255));
-    let old_brush = SelectObject(dc, white);
-    let pen = CreatePen(PS_SOLID, 1, rgb(229, 234, 238));
-    let old_pen = SelectObject(dc, pen);
-    RoundRect(dc, s(24), s(110), s(516), s(490), s(16), s(16));
-    SelectObject(dc, old_brush);
-    DeleteObject(white);
-    SetBkMode(dc, TRANSPARENT as i32);
-    SetTextColor(dc, rgb(25, 39, 51));
-    SelectObject(dc, app.title_font);
-    let mut title = RECT {
-        left: s(24),
-        top: s(73),
-        right: s(516),
-        bottom: s(106),
-    };
-    DrawTextW(
-        dc,
-        wide("关于").as_ptr(),
-        -1,
-        &mut title,
-        DT_CENTER | DT_SINGLELINE,
-    );
-    SelectObject(dc, app.font);
-    let commit = env!("BUILD_COMMIT");
-    let commit = &commit[..commit.len().min(12)];
-    let suffix = if env!("BUILD_DIRTY") == "true" {
-        "（本地改动）"
-    } else {
-        ""
-    };
-    for (y, h, text) in [
-        (
-            128,
-            80,
-            "产品信息\n南枫 Codex 额度\nWindows 只读额度悬浮窗，复用本机 Codex 登录。".to_string(),
-        ),
-        (
-            235,
-            106,
-            format!(
-                "版本信息\nDesktop 版 {} · 开发日期 2026-10-08\nGit Commit：{commit}{suffix}\nGitHub · nanzhufeng/NanfengCodexQuota-Windows",
-                env!("CARGO_PKG_VERSION")
-            ),
-        ),
-        (
-            364,
-            108,
-            "开发者信息\n开发者：席瑞\n联系邮箱：nanzhufeng.studio@gmail.com\n版权所有 © 2026 席瑞"
-                .to_string(),
-        ),
-    ] {
-        let mut rect = RECT {
-            left: s(44),
-            top: s(y),
-            right: s(496),
-            bottom: s(y + h),
-        };
-        DrawTextW(
-            dc,
-            wide(&text).as_ptr(),
-            -1,
-            &mut rect,
-            DT_LEFT | DT_WORDBREAK,
-        );
-    }
-    for y in [219, 351] {
-        MoveToEx(dc, s(44), s(y), null_mut());
-        LineTo(dc, s(496), s(y));
-    }
-    SelectObject(dc, old_pen);
-    DeleteObject(pen);
 }
 const RUN_KEY: &str = "Software\\Microsoft\\Windows\\CurrentVersion\\Run";
 const RUN_NAME: &str = "NanfengCodexQuota";

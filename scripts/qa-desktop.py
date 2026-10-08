@@ -83,6 +83,15 @@ report["live_quota"] = diagnostics()["remaining_percent"]
 command(hwnd, 101)
 settings = wait_until(lambda: u.FindWindowW("NanfengCodexQuota.Settings.v1", None))
 command(settings, 301)
+assert not u.GetDlgItem(settings, 302), "Removed feature-review navigation is still present"
+command(settings, 302)
+assert u.GetDlgItem(settings, 203), "Stale removed-page command changed the current view"
+command(settings, 303)
+assert not u.GetDlgItem(settings, 203), "About navigation did not switch pages"
+command(settings, 301)
+assert u.GetDlgItem(settings, 203), "General navigation did not restore settings"
+report["review_removed"] = True
+report["navigation"] = True
 top = u.GetDlgItem(settings, 203)
 was_top = bool(u.SendMessageW(top, 0xF0, 0, 0))
 u.SendMessageW(top, 0xF5, 0, 0)  # BM_CLICK: exercises the actual checkbox notification.
