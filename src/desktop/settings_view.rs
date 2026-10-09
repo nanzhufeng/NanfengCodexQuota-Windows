@@ -211,14 +211,14 @@ impl Layout {
         let data = self.ring_y + self.ring + 20;
         let center = self.ring_y + self.ring / 2;
         match id {
-            T_GENERAL => (self.width - 234, 22, 90, 54),
-            T_ABOUT => (self.width - 124, 22, 90, 54),
+            T_GENERAL => (self.width - 234, 27, 90, 44),
+            T_ABOUT => (self.width - 124, 27, 90, 44),
             GITHUB_LINK => {
                 let width = 660.min(self.width - 96);
                 ((self.width - width) / 2 + 24, 414, width - 48, 28)
             }
             502 => (34, 108, self.left_width, 36),
-            503 => (34, 151, 150, 30),
+            503 => (34, 151, 110, 30),
             504 => (self.ring_x + self.ring / 2 - 80, center - 42, 160, 70),
             505 => (self.ring_x + self.ring / 2 - 50, center + 29, 100, 26),
             506 => (68, data, 114, 28),
@@ -575,6 +575,10 @@ unsafe extern "system" fn control_proc(
             1
         }
         WM_ERASEBKGND => 1,
+        WM_PRINTCLIENT => {
+            draw_control(hwnd, w as HDC, data);
+            0
+        }
         WM_PAINT => {
             let mut ps: PAINTSTRUCT = zeroed();
             let dc = BeginPaint(hwnd, &mut ps);
@@ -779,13 +783,24 @@ unsafe fn draw_control(hwnd: HWND, dc: HDC, data: &Control) {
             };
             canvas.rounded(
                 (0.0, 0.0, width as f32 - 1.0, height as f32 - 1.0),
-                s(10) as f32,
+                (height - 1) as f32 / 2.0,
                 bg,
                 None,
             );
+            let mut measure: RECT = zeroed();
+            let old = SelectObject(dc, data.font);
+            DrawTextW(
+                dc,
+                wide(&label).as_ptr(),
+                -1,
+                &mut measure,
+                DT_CALCRECT | DT_SINGLELINE,
+            );
+            SelectObject(dc, old);
+            let left = (width - measure.right - s(18)) / 2;
             canvas.rounded(
                 (
-                    s(12) as f32,
+                    left as f32,
                     (height - s(10)) as f32 / 2.0,
                     s(10) as f32,
                     s(10) as f32,
@@ -799,7 +814,7 @@ unsafe fn draw_control(hwnd: HWND, dc: HDC, data: &Control) {
                 data.font,
                 &label,
                 RECT {
-                    left: s(30),
+                    left: left + s(18),
                     ..rect
                 },
                 color,
@@ -807,11 +822,11 @@ unsafe fn draw_control(hwnd: HWND, dc: HDC, data: &Control) {
             );
         }
         Kind::Nav { selected } => {
-            if data.hover.get() {
+            if selected || data.hover.get() {
                 canvas.rounded(
                     (1.0, 1.0, (width - 2) as f32, (height - 2) as f32),
-                    s(8) as f32,
-                    0xfff6faf8,
+                    (height - 2) as f32 / 2.0,
+                    if selected { 0xffe1f6eb } else { 0xfff6faf8 },
                     None,
                 );
             }
@@ -823,19 +838,6 @@ unsafe fn draw_control(hwnd: HWND, dc: HDC, data: &Control) {
                 if selected { GREEN } else { DARK },
                 centered,
             );
-            if selected {
-                canvas.rounded(
-                    (
-                        s(8) as f32,
-                        (height - s(3)) as f32,
-                        (width - s(16)) as f32,
-                        s(3) as f32,
-                    ),
-                    s(1) as f32,
-                    GREEN,
-                    None,
-                );
-            }
         }
         Kind::Toggle => {
             let checked = SendMessageW(hwnd, BM_GETCHECK, 0, 0) == BST_CHECKED as isize;
@@ -870,7 +872,7 @@ unsafe fn draw_control(hwnd: HWND, dc: HDC, data: &Control) {
         Kind::Choice => {
             canvas.rounded(
                 (1.0, 1.0, (width - 2) as f32, (height - 2) as f32),
-                s(9) as f32,
+                (height - 2) as f32 / 2.0,
                 WHITE,
                 Some(if GetFocus() == hwnd {
                     GREEN
@@ -947,7 +949,7 @@ unsafe fn draw_control(hwnd: HWND, dc: HDC, data: &Control) {
             };
             canvas.rounded(
                 (1.0, 1.0, (width - 2) as f32, (height - 2) as f32),
-                s(10) as f32,
+                (height - 2) as f32 / 2.0,
                 color,
                 if primary { None } else { Some(0xffb8c3cc) },
             );
@@ -1019,11 +1021,7 @@ unsafe fn draw_control(hwnd: HWND, dc: HDC, data: &Control) {
     {
         canvas.rounded(
             (2.0, 2.0, (width - 4) as f32, (height - 4) as f32),
-            match data.kind {
-                Kind::Toggle => (height - 4) as f32 / 2.0,
-                Kind::Nav { .. } => s(6) as f32,
-                _ => s(8) as f32,
-            },
+            (height - 4) as f32 / 2.0,
             0x00000000,
             Some(0xff56b990),
         );

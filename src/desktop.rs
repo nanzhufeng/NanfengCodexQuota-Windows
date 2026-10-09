@@ -783,6 +783,16 @@ unsafe fn write_diagnostics(app: &App) {
 unsafe fn open_settings(app: &mut App) {
     if !app.settings.is_null() {
         ShowWindow(app.settings, SW_RESTORE);
+        // An explicit user action must show the window even after a hidden launcher startup.
+        SetWindowPos(
+            app.settings,
+            null_mut(),
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_SHOWWINDOW,
+        );
         SetForegroundWindow(app.settings);
         return;
     }
@@ -806,6 +816,15 @@ unsafe fn open_settings(app: &mut App) {
     settings_view::configure_chrome(app.settings);
     rebuild_settings(app);
     ShowWindow(app.settings, SW_SHOW);
+    SetWindowPos(
+        app.settings,
+        null_mut(),
+        0,
+        0,
+        0,
+        0,
+        SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_SHOWWINDOW,
+    );
     SetForegroundWindow(app.settings);
 }
 unsafe fn rebuild_settings(app: &mut App) {
@@ -956,6 +975,13 @@ unsafe extern "system" fn settings_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPAR
             SetBkMode(w as HDC, TRANSPARENT as i32);
             SetTextColor(w as HDC, rgb(25, 39, 51));
             app.background as isize
+        }
+        WM_PRINTCLIENT => {
+            let mut rect: RECT = zeroed();
+            GetClientRect(hwnd, &mut rect);
+            FillRect(w as HDC, &rect, app.background);
+            settings_view::paint(app, w as HDC);
+            0
         }
         WM_ERASEBKGND => {
             let mut r: RECT = zeroed();
