@@ -46,6 +46,7 @@ const TOP_CHECK: usize = 203;
 const POSITION: usize = 204;
 const T_GENERAL: usize = 301;
 const T_ABOUT: usize = 303;
+const GITHUB_LINK: usize = 701;
 
 struct App {
     config: Config,
@@ -287,10 +288,29 @@ unsafe extern "system" fn widget_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM
         TRAY => {
             match l as u32 {
                 WM_RBUTTONUP | WM_CONTEXTMENU => menu(app),
-                WM_LBUTTONUP | WM_LBUTTONDBLCLK => show_widget(app),
+                WM_LBUTTONUP => show_widget(app),
+                WM_LBUTTONDBLCLK => open_settings(app),
                 _ => {}
             }
             0
+        }
+        WM_MEASUREITEM => {
+            let item = &mut *(l as *mut MEASUREITEMSTRUCT);
+            if item.CtlType == windows_sys::Win32::UI::Controls::ODT_MENU {
+                let dpi = GetDpiForWindow(hwnd).max(96);
+                item.itemWidth = mul_div(224, dpi as i32, 96) as u32;
+                item.itemHeight = mul_div(44, dpi as i32, 96) as u32;
+                return 1;
+            }
+            DefWindowProcW(hwnd, msg, w, l)
+        }
+        WM_DRAWITEM => {
+            let item = &*(l as *const DRAWITEMSTRUCT);
+            if item.CtlType == windows_sys::Win32::UI::Controls::ODT_MENU {
+                settings_view::draw_menu(app, item);
+                return 1;
+            }
+            DefWindowProcW(hwnd, msg, w, l)
         }
         RESTORE => {
             restore_position(app);
@@ -663,7 +683,7 @@ unsafe fn menu(app: &mut App) {
                 MF_STRING
             },
         ),
-        (OPEN_SETTINGS, "设置", MF_STRING),
+        (OPEN_SETTINGS, "打开主界面", MF_STRING),
         (
             TOP,
             "保持置顶",
@@ -684,14 +704,33 @@ unsafe fn menu(app: &mut App) {
         ),
         (EXIT, "退出", MF_STRING),
     ] {
-        AppendMenuW(menu, flags, id, wide(label).as_ptr());
+        let label = wide(label);
+        let info = MENUITEMINFOW {
+            cbSize: size_of::<MENUITEMINFOW>() as u32,
+            fMask: MIIM_ID | MIIM_FTYPE | MIIM_STATE | MIIM_STRING,
+            fType: MFT_OWNERDRAW,
+            fState: flags,
+            wID: id as u32,
+            dwTypeData: label.as_ptr() as *mut u16,
+            cch: label.len() as u32 - 1,
+            ..zeroed()
+        };
+        InsertMenuItemW(menu, u32::MAX, 1, &info);
     }
+    let background = CreateSolidBrush(rgb(255, 255, 255));
+    let info = MENUINFO {
+        cbSize: size_of::<MENUINFO>() as u32,
+        fMask: MIM_BACKGROUND,
+        hbrBack: background,
+        ..zeroed()
+    };
+    SetMenuInfo(menu, &info);
     let mut cursor: POINT = zeroed();
     GetCursorPos(&mut cursor);
     SetForegroundWindow(app.widget);
     let choice = TrackPopupMenu(
         menu,
-        TPM_RETURNCMD | TPM_NONOTIFY | TPM_RIGHTBUTTON,
+        TPM_RETURNCMD | TPM_RIGHTBUTTON,
         cursor.x,
         cursor.y,
         0,
@@ -699,6 +738,7 @@ unsafe fn menu(app: &mut App) {
         null(),
     );
     DestroyMenu(menu);
+    DeleteObject(background);
     if choice > 0 {
         command(app, choice as usize);
     }
@@ -752,7 +792,7 @@ unsafe fn open_settings(app: &mut App) {
     app.settings = CreateWindowExW(
         WS_EX_APPWINDOW | WS_EX_CONTROLPARENT,
         wide(SETTINGS).as_ptr(),
-        wide("南枫 Codex 额度 · 设置").as_ptr(),
+        wide(TITLE).as_ptr(),
         WS_OVERLAPPEDWINDOW,
         CW_USEDEFAULT,
         CW_USEDEFAULT,
@@ -853,6 +893,24 @@ unsafe extern "system" fn settings_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPAR
             let id = w & 0xffff;
             let notification = (w >> 16) & 0xffff;
             match id {
+                GITHUB_LINK => {
+                    let result = ShellExecuteW(
+                        hwnd,
+                        wide("open").as_ptr(),
+                        wide("https://github.com/nanzhufeng/NanfengCodexQuota-Windows").as_ptr(),
+                        null(),
+                        null(),
+                        SW_SHOWNORMAL,
+                    );
+                    if result as usize <= 32 {
+                        MessageBoxW(
+                            hwnd,
+                            wide("无法打开 GitHub 链接，请检查系统默认浏览器设置后重试。").as_ptr(),
+                            wide(TITLE).as_ptr(),
+                            MB_OK | MB_ICONWARNING,
+                        );
+                    }
+                }
                 T_GENERAL | T_ABOUT => {
                     app.page = id;
                     rebuild_settings(app);

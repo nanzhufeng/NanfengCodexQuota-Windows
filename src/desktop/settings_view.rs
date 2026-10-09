@@ -138,6 +138,7 @@ enum Kind {
     Secondary,
     Toggle,
     Choice,
+    Link,
 }
 struct Control {
     kind: Kind,
@@ -212,7 +213,10 @@ impl Layout {
         match id {
             T_GENERAL => (self.width - 234, 22, 90, 54),
             T_ABOUT => (self.width - 124, 22, 90, 54),
-            501 => (94, 22, self.width - 365, 48),
+            GITHUB_LINK => {
+                let width = 660.min(self.width - 96);
+                ((self.width - width) / 2 + 24, 414, width - 48, 28)
+            }
             502 => (34, 108, self.left_width, 36),
             503 => (34, 151, 150, 30),
             504 => (self.ring_x + self.ring / 2 - 80, center - 42, 160, 70),
@@ -271,17 +275,6 @@ pub(super) unsafe fn rebuild(app: &mut App) {
         "关于",
         Kind::Nav {
             selected: app.page == T_ABOUT,
-        },
-        DARK,
-    );
-    add(
-        app,
-        501,
-        TITLE,
-        Kind::Label {
-            size: 24,
-            weight: 600,
-            center: false,
         },
         DARK,
     );
@@ -369,6 +362,14 @@ pub(super) unsafe fn rebuild(app: &mut App) {
         );
         add(app, REFRESH, "立即刷新", Kind::Action, WHITE);
         add(app, POSITION, "找回悬浮窗", Kind::Secondary, DARK);
+    } else {
+        add(
+            app,
+            GITHUB_LINK,
+            "GitHub · nanzhufeng/NanfengCodexQuota-Windows ↗",
+            Kind::Link,
+            0xff2768a6,
+        );
     }
     layout(app);
     update(app);
@@ -385,7 +386,7 @@ unsafe fn add(app: &mut App, id: usize, text: &str, kind: Kind, color: u32) -> H
                 | WS_VSCROLL,
         ),
         Kind::Toggle => ("BUTTON", WS_TABSTOP | BS_AUTOCHECKBOX as u32),
-        Kind::Nav { .. } | Kind::Action | Kind::Secondary => {
+        Kind::Nav { .. } | Kind::Action | Kind::Secondary | Kind::Link => {
             ("BUTTON", WS_TABSTOP | BS_PUSHBUTTON as u32)
         }
         _ => ("STATIC", 0),
@@ -418,7 +419,7 @@ unsafe fn add(app: &mut App, id: usize, text: &str, kind: Kind, color: u32) -> H
         0,
         weight,
         0,
-        0,
+        u32::from(matches!(kind, Kind::Link)),
         0,
         DEFAULT_CHARSET as u32,
         0,
@@ -569,6 +570,10 @@ unsafe extern "system" fn control_proc(
     }
     let data = &*(reference as *const Control);
     match msg {
+        WM_SETCURSOR if matches!(data.kind, Kind::Link) => {
+            SetCursor(LoadCursorW(null_mut(), IDC_HAND));
+            1
+        }
         WM_ERASEBKGND => 1,
         WM_PAINT => {
             let mut ps: PAINTSTRUCT = zeroed();
@@ -633,6 +638,99 @@ pub(super) unsafe fn draw_choice(item: &DRAWITEMSTRUCT) {
         );
     }
 }
+pub(super) unsafe fn draw_menu(app: &App, item: &DRAWITEMSTRUCT) {
+    let dpi = GetDpiForWindow(app.widget).max(96);
+    let s = |n| mul_div(n, dpi as i32, 96);
+    let r = item.rcItem;
+    FillRect(item.hDC, &r, GetStockObject(WHITE_BRUSH) as HBRUSH);
+    let selected = item.itemState & ODS_SELECTED != 0;
+    let disabled = item.itemState & windows_sys::Win32::UI::Controls::ODS_DISABLED != 0;
+    let checked = item.itemState & windows_sys::Win32::UI::Controls::ODS_CHECKED != 0;
+    if selected && !disabled {
+        let canvas = Canvas::new(item.hDC);
+        canvas.rounded(
+            (
+                (r.left + s(6)) as f32,
+                (r.top + s(3)) as f32,
+                (r.right - r.left - s(12)) as f32,
+                (r.bottom - r.top - s(6)) as f32,
+            ),
+            s(8) as f32,
+            0xffeef7f2,
+            None,
+        );
+    }
+    let (label, glyph) = match item.itemID as usize {
+        REFRESH => ("立即刷新", "\u{e72c}"),
+        OPEN_SETTINGS => ("打开主界面", "\u{e80f}"),
+        TOP => ("保持置顶", "\u{e718}"),
+        HIDE if app.visible => ("隐藏悬浮窗", "\u{e921}"),
+        HIDE => ("显示悬浮窗", "\u{e944}"),
+        EXIT => ("退出", "\u{e8bb}"),
+        _ => return,
+    };
+    let color = if disabled {
+        MUTED
+    } else if checked {
+        GREEN
+    } else {
+        0xff405362
+    };
+    let font = CreateFontW(
+        -s(18),
+        0,
+        0,
+        0,
+        400,
+        0,
+        0,
+        0,
+        DEFAULT_CHARSET as u32,
+        0,
+        0,
+        CLEARTYPE_QUALITY as u32,
+        0,
+        wide("Segoe MDL2 Assets").as_ptr(),
+    );
+    text(
+        item.hDC,
+        font,
+        glyph,
+        RECT {
+            left: r.left + s(16),
+            right: r.left + s(38),
+            ..r
+        },
+        color,
+        DT_CENTER | DT_VCENTER | DT_SINGLELINE,
+    );
+    DeleteObject(font);
+    text(
+        item.hDC,
+        app.font,
+        label,
+        RECT {
+            left: r.left + s(52),
+            right: r.right - s(30),
+            ..r
+        },
+        color,
+        DT_VCENTER | DT_SINGLELINE,
+    );
+    if checked {
+        text(
+            item.hDC,
+            app.font,
+            "✓",
+            RECT {
+                left: r.right - s(28),
+                ..r
+            },
+            GREEN,
+            DT_VCENTER | DT_SINGLELINE,
+        );
+    }
+}
 unsafe fn draw_control(hwnd: HWND, dc: HDC, data: &Control) {
     let mut rect: RECT = zeroed();
     GetClientRect(hwnd, &mut rect);
@@ -649,6 +747,18 @@ unsafe fn draw_control(hwnd: HWND, dc: HDC, data: &Control) {
     let label = String::from_utf16_lossy(&buffer[..count.max(0) as usize]);
     let centered = DT_CENTER | DT_VCENTER | DT_SINGLELINE;
     match data.kind {
+        Kind::Link => text(
+            dc,
+            data.font,
+            &label,
+            rect,
+            if data.hover.get() {
+                GREEN
+            } else {
+                data.color.get()
+            },
+            DT_VCENTER | DT_SINGLELINE,
+        ),
         Kind::Label { center, .. } => text(
             dc,
             data.font,
@@ -929,25 +1039,6 @@ pub(super) unsafe fn paint(app: &App, dc: HDC) {
     LineTo(dc, s(w), s(86));
     let pen = SelectObject(dc, old_pen);
     DeleteObject(pen);
-    let icon = LoadImageW(
-        GetModuleHandleW(null()),
-        std::ptr::without_provenance(1),
-        IMAGE_ICON,
-        s(48),
-        s(48),
-        LR_SHARED,
-    );
-    DrawIconEx(
-        dc,
-        s(30),
-        s(21),
-        icon,
-        s(48),
-        s(48),
-        0,
-        null_mut(),
-        DI_NORMAL,
-    );
     if app.page == T_ABOUT {
         paint_about(app, dc, w, h, dpi);
         return;
@@ -1033,7 +1124,7 @@ unsafe fn paint_about(app: &App, dc: HDC, w: i32, h: i32, dpi: u32) {
         (
             "版本信息",
             format!(
-                "Desktop 版 {} · 开发日期 2026-10-08\nGit Commit：{commit}{dirty}\nGitHub · nanzhufeng/NanfengCodexQuota-Windows",
+                "Desktop 版 {} · 开发日期 2026-10-09\nGit Commit：{commit}{dirty}",
                 env!("CARGO_PKG_VERSION")
             ),
         ),

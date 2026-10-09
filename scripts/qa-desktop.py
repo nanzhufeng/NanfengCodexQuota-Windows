@@ -80,6 +80,15 @@ def start():
 hwnd = wait_until(widget)
 wait_until(lambda: not diagnostics()["refreshing"] and diagnostics()["remaining_percent"] is not None)
 report["live_quota"] = diagnostics()["remaining_percent"]
+existing = u.FindWindowW("NanfengCodexQuota.Settings.v1", None)
+if existing:
+    u.SendMessageW(existing, 0x10, 0, 0)
+u.SendMessageW(hwnd, 0x8000 + 11, 0, 0x203)  # actual tray double-click callback
+settings = wait_until(lambda: (s := u.FindWindowW("NanfengCodexQuota.Settings.v1", None)) and u.IsWindowVisible(s) and s)
+assert not u.GetDlgItem(settings, 501), "Removed brand heading is still present"
+u.SendMessageW(hwnd, 0x8000 + 11, 0, 0x203)
+assert u.FindWindowW("NanfengCodexQuota.Settings.v1", None) == settings, "Double-click duplicated the main window"
+report["tray_double_click"] = True
 command(hwnd, 101)
 settings = wait_until(lambda: u.FindWindowW("NanfengCodexQuota.Settings.v1", None))
 command(settings, 301)
@@ -88,6 +97,7 @@ command(settings, 302)
 assert u.GetDlgItem(settings, 203), "Stale removed-page command changed the current view"
 command(settings, 303)
 assert not u.GetDlgItem(settings, 203), "About navigation did not switch pages"
+assert u.GetDlgItem(settings, 701), "GitHub repository link is not an interactive control"
 command(settings, 301)
 assert u.GetDlgItem(settings, 203), "General navigation did not restore settings"
 report["review_removed"] = True
