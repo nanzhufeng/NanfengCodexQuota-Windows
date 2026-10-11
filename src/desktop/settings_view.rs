@@ -493,8 +493,6 @@ pub(super) unsafe fn update(app: &mut App) {
         );
         let (status, color) = if let Some(f) = app.monitor.failure {
             (f.label(), 0xffbc6808)
-        } else if app.monitor.refreshing {
-            ("刷新中", MUTED)
         } else if app.monitor.stale(now, app.config.interval_secs) {
             ("数据过期", 0xffbc6808)
         } else if app.monitor.limits.is_some() {
@@ -521,7 +519,7 @@ pub(super) unsafe fn update(app: &mut App) {
             .map(|l| {
                 l.sampled_at
                     .with_timezone(&Local)
-                    .format("%m月%d日  %H:%M")
+                    .format("%m月%d日  %H:%M:%S")
                     .to_string()
             })
             .unwrap_or_else(|| "尚无成功记录".into());
@@ -540,15 +538,7 @@ pub(super) unsafe fn update(app: &mut App) {
             );
         }
         let button = GetDlgItem(app.settings, REFRESH as i32);
-        SetWindowTextW(
-            button,
-            wide(if app.monitor.refreshing {
-                "刷新中"
-            } else {
-                "立即刷新"
-            })
-            .as_ptr(),
-        );
+        SetWindowTextW(button, wide("立即刷新").as_ptr());
         EnableWindow(button, i32::from(!app.monitor.refreshing));
     }
     InvalidateRect(app.settings, null(), 0);

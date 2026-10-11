@@ -54,14 +54,12 @@ impl Monitor {
             .and_then(|l| l.secondary.remaining_percent());
         let label = if let Some(f) = self.failure {
             f.label().to_string()
-        } else if self.refreshing {
-            "刷新中".into()
         } else if self.stale(now, interval) {
             "数据过期".into()
         } else if let Some(l) = &self.limits {
             format!(
                 "更新 {}",
-                l.sampled_at.with_timezone(&Local).format("%H:%M")
+                l.sampled_at.with_timezone(&Local).format("%H:%M:%S")
             )
         } else {
             "等待查询".into()
@@ -78,8 +76,6 @@ impl Monitor {
     pub fn details(&self, now: DateTime<Utc>, interval: u64) -> String {
         let status = if let Some(f) = self.failure {
             f.label()
-        } else if self.refreshing {
-            "正在刷新"
         } else if self.stale(now, interval) {
             "数据过期"
         } else if self.limits.is_some() {
@@ -127,6 +123,45 @@ pub fn clamp_position(x: i32, y: i32, size: i32, work: (i32, i32, i32, i32)) -> 
 mod tests {
     use super::*;
     use crate::limits::LimitWindow;
+    #[test]
+    fn updating_preserves_the_display_until_a_new_sample_succeeds() {
+        let now = Utc::now();
+        let mut m = Monitor::default();
+        m.succeeded(
+            RateLimits {
+                sampled_at: now,
+                secondary: LimitWindow {
+                    used_percent: Some(34),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            "CLI".into(),
+        );
+        let previous = m.render_model(now, 60);
+        let details = m.details(now, 60);
+        m.started();
+        assert_eq!(m.render_model(now, 60), previous);
+        assert_eq!(m.details(now, 60), details);
+        let next = now + chrono::Duration::minutes(1);
+        m.succeeded(
+            RateLimits {
+                sampled_at: next,
+                secondary: LimitWindow {
+                    used_percent: Some(34),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            "CLI".into(),
+        );
+        assert_eq!(m.render_model(next, 60).remaining_percent, Some(66));
+        assert_ne!(
+            m.render_model(next, 60).refresh_label,
+            previous.refresh_label
+        );
+        assert_eq!(m.limits.as_ref().unwrap().sampled_at, next);
+    }
     #[test]
     fn failure_preserves_last_success_and_marks_stale() {
         let mut m = Monitor::default();

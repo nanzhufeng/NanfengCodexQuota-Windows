@@ -92,6 +92,28 @@ report["tray_double_click"] = True
 command(hwnd, 101)
 settings = wait_until(lambda: u.FindWindowW("NanfengCodexQuota.Settings.v1", None))
 command(settings, 301)
+def control_text(identifier):
+    buffer = c.create_unicode_buffer(256)
+    u.GetWindowTextW.argtypes = [w.HWND, w.LPWSTR, c.c_int]
+    u.GetWindowTextW(u.GetDlgItem(settings, identifier), buffer, 256)
+    return buffer.value
+
+previous_status = diagnostics()["status"]
+previous_time = control_text(509)
+command(settings, 100)
+deadline = time.monotonic() + 20
+while time.monotonic() < deadline:
+    assert control_text(503) != "刷新中", "Status switched to a routine refresh hint"
+    assert control_text(100) == "立即刷新", "Refresh button label changed during query"
+    current = diagnostics()
+    if not current["refreshing"] and current["status"] != previous_status:
+        break
+    time.sleep(0.02)
+else:
+    raise AssertionError("New successful sample did not arrive")
+assert control_text(509) != previous_time, "Last success time did not advance"
+report["quiet_refresh"] = True
+report["updated_time"] = control_text(509)
 assert not u.GetDlgItem(settings, 302), "Removed feature-review navigation is still present"
 command(settings, 302)
 assert u.GetDlgItem(settings, 203), "Stale removed-page command changed the current view"
