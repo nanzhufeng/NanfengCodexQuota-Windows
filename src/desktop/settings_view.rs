@@ -539,7 +539,6 @@ pub(super) unsafe fn update(app: &mut App) {
         }
         let button = GetDlgItem(app.settings, REFRESH as i32);
         SetWindowTextW(button, wide("立即刷新").as_ptr());
-        EnableWindow(button, i32::from(!app.monitor.refreshing));
     }
     InvalidateRect(app.settings, null(), 0);
 }

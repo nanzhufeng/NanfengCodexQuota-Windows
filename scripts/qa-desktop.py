@@ -105,6 +105,8 @@ deadline = time.monotonic() + 20
 while time.monotonic() < deadline:
     assert control_text(503) != "刷新中", "Status switched to a routine refresh hint"
     assert control_text(100) == "立即刷新", "Refresh button label changed during query"
+    u.IsWindowEnabled.argtypes = [w.HWND]
+    assert u.IsWindowEnabled(u.GetDlgItem(settings, 100)), "Routine query changed button appearance"
     current = diagnostics()
     if not current["refreshing"] and current["status"] != previous_status:
         break

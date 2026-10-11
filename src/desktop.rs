@@ -21,7 +21,7 @@ use windows_sys::Win32::{
     UI::{
         Controls::{BST_CHECKED, DRAWITEMSTRUCT, MEASUREITEMSTRUCT, ODS_SELECTED},
         HiDpi::*,
-        Input::KeyboardAndMouse::{EnableWindow, ReleaseCapture},
+        Input::KeyboardAndMouse::ReleaseCapture,
         Shell::*,
         WindowsAndMessaging::*,
     },
@@ -674,15 +674,7 @@ unsafe fn update_tray(app: &mut App) {
 unsafe fn menu(app: &mut App) {
     let menu = CreatePopupMenu();
     for (id, label, flags) in [
-        (
-            REFRESH,
-            "立即刷新",
-            if app.monitor.refreshing {
-                MF_GRAYED
-            } else {
-                MF_STRING
-            },
-        ),
+        (REFRESH, "立即刷新", MF_STRING),
         (OPEN_SETTINGS, "打开主界面", MF_STRING),
         (
             TOP,
