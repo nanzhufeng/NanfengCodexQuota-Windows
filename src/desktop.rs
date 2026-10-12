@@ -174,7 +174,13 @@ pub fn run() -> Result<()> {
             anyhow::ensure!(RegisterClassW(&wc) != 0, "无法注册窗口类");
         }
         app.widget = CreateWindowExW(
-            WS_EX_TOOLWINDOW | WS_EX_LAYERED,
+            WS_EX_TOOLWINDOW
+                | WS_EX_LAYERED
+                | if app.config.always_on_top {
+                    WS_EX_TOPMOST
+                } else {
+                    0
+                },
             wide(CLASS).as_ptr(),
             wide(TITLE).as_ptr(),
             WS_POPUP,
@@ -505,6 +511,19 @@ unsafe fn maintain_widget(app: &mut App) {
         previous = GetWindow(previous, GW_HWNDPREV);
     }
     if raise {
+        // A fresh layered window can have an inconsistent initial band/style.
+        // Reset only a missing TOPMOST flag, then promote without activation.
+        if GetWindowLongPtrW(app.widget, GWL_EXSTYLE) as u32 & WS_EX_TOPMOST == 0 {
+            SetWindowPos(
+                app.widget,
+                HWND_NOTOPMOST,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+            );
+        }
         SetWindowPos(
             app.widget,
             HWND_TOPMOST,
@@ -825,7 +844,7 @@ unsafe fn command(app: &mut App, id: usize) {
 }
 unsafe fn write_diagnostics(app: &App) {
     // Local, minimal and credential-free diagnostics; not an external log or an API payload.
-    let payload = serde_json::json!({"version":env!("CARGO_PKG_VERSION"),"commit":env!("BUILD_COMMIT"),"dirty":env!("BUILD_DIRTY"),"status":app.monitor.details(Utc::now(),app.config.interval_secs),"remaining_percent":app.monitor.render_model(Utc::now(),app.config.interval_secs).remaining_percent,"refreshing":app.monitor.refreshing,"x":app.config.x,"y":app.config.y,"dpi":app.dpi,"interval_secs":app.config.interval_secs});
+    let payload = serde_json::json!({"version":env!("CARGO_PKG_VERSION"),"commit":env!("BUILD_COMMIT"),"dirty":env!("BUILD_DIRTY"),"status":app.monitor.details(Utc::now(),app.config.interval_secs),"remaining_percent":app.monitor.render_model(Utc::now(),app.config.interval_secs).remaining_percent,"refreshing":app.monitor.refreshing,"x":app.config.x,"y":app.config.y,"dpi":app.dpi,"interval_secs":app.config.interval_secs,"always_on_top":app.config.always_on_top,"visible":app.visible,"dragging":app.dragging,"closing":app.closing,"window_topmost":GetWindowLongPtrW(app.widget,GWL_EXSTYLE) as u32 & WS_EX_TOPMOST != 0});
     if let Some(parent) = app.path.parent() {
         let _ = std::fs::create_dir_all(parent);
         let _ = std::fs::write(parent.join("diagnostics.json"), payload.to_string());

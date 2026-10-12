@@ -33,3 +33,5 @@
 [Windows GetMonitorInfo 工作区说明](https://learn.microsoft.com/en-us/windows/win32/shell/abm-gettaskbarpos)提供任务栏/其他appbar避让范围；本轮仅使用本机工作区，不修改系统任务栏设置。
 
 QA：scripts/qa-topmost.py 创建并销毁隔离遮挡窗口；旧版两项明确红灯，新版恢复、无焦点抢占、标志降级恢复、拖动不被打断、释放后工作区校正、禁用/隐藏尊重均绿灯。普通桌面窗口与本机底部任务栏验证通过；独占全屏、安全桌面、自动隐藏任务栏和物理多屏差异未实测，不声称跨越系统层级限制。
+
+补充冷启动证据：初版维护方案在安装版冷启动仍失败，运行诊断确认偏好true/visibletrue/draggingfalse但实际TOPMOST标志false，单次HWND_TOPMOST返回成功也未恢复；HWND_NOTOPMOST→HWND_TOPMOST转换可恢复。最终在创建窗口时带上所选TOPMOST扩展样式；标志缺失时先重置层级再提升。修改后的冷启动与降级回归通过；增加偏好/可见/拖动/实际置顶布尔诊断，删除临时阶段计数和1秒诊断写盘。QA等待用户配置与真实样式一致，清理以配置而非瞬时样式为准，避免测试误改用户置顶偏好。

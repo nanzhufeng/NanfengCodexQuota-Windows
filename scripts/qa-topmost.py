@@ -1,5 +1,5 @@
 """Exercise topmost recovery and taskbar avoidance using a disposable local window."""
-import argparse,ctypes as c,json,pathlib,time,tkinter as tk,os,re
+import argparse,ctypes as c,json,pathlib,time,tkinter as tk,os,re,tomllib
 from ctypes import wintypes as w
 p=argparse.ArgumentParser();p.add_argument('--output',type=pathlib.Path,required=True);a=p.parse_args();a.output.mkdir(parents=True,exist_ok=True)
 u=c.windll.user32;u.SetProcessDpiAwarenessContext(c.c_void_p(-4))
@@ -16,7 +16,14 @@ while time.monotonic()<deadline:
  if widget and u.IsWindowVisible(widget) and snapshot.get('version')==expected_version and snapshot.get('refreshing') is False:break
  time.sleep(.05)
 else:raise AssertionError('Application did not initialize')
-orig=w.RECT();u.GetWindowRect(widget,c.byref(orig));original_top=bool(u.GetWindowLongPtrW(widget,-20)&8)
+config_path=pathlib.Path(os.environ['LOCALAPPDATA'])/'NanfengCodexQuota/settings.toml'
+original_top=tomllib.loads(config_path.read_text(encoding='utf-8'))['always_on_top']
+# The diagnostic file may belong to a previous run; wait for window initialization
+# and compare against the user's preference, never infer it from transient styles.
+deadline=time.monotonic()+5
+while bool(u.GetWindowLongPtrW(widget,-20)&8)!=original_top and time.monotonic()<deadline:time.sleep(.05)
+assert bool(u.GetWindowLongPtrW(widget,-20)&8)==original_top
+orig=w.RECT();u.GetWindowRect(widget,c.byref(orig))
 foreground=u.GetForegroundWindow();info=MI(size=c.sizeof(MI));assert u.GetMonitorInfoW(u.MonitorFromWindow(widget,2),c.byref(info))
 root=None;report={}
 def pause(seconds):
@@ -67,7 +74,7 @@ try:
 finally:
  u.SendMessageW(widget,0x232,0,0)
  if root:root.destroy()
- if bool(u.GetWindowLongPtrW(widget,-20)&8)!=original_top:u.SendMessageW(widget,0x111,102,0)
+ if tomllib.loads(config_path.read_text(encoding='utf-8'))['always_on_top']!=original_top:u.SendMessageW(widget,0x111,102,0)
  u.SetWindowPos(widget,None,orig.left,orig.top,0,0,0x15);u.SendMessageW(widget,0x232,0,0)
  if foreground:u.SetForegroundWindow(foreground)
 (a.output/'topmost-qa.json').write_text(json.dumps(report,indent=2),encoding='utf-8');print(json.dumps(report));assert all(report.values()),report
