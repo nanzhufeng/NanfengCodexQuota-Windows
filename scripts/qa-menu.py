@@ -47,9 +47,9 @@ def popup():
     found = []
     @callback_type
     def collect(handle, _):
-        name = c.create_unicode_buffer(32)
-        u.GetClassNameW(handle, name, 32)
-        if name.value == "#32768" and u.IsWindowVisible(handle):
+        name = c.create_unicode_buffer(64)
+        u.GetClassNameW(handle, name, 64)
+        if name.value == "NanfengCodexQuota.Context.v1" and u.IsWindowVisible(handle):
             found.append(handle)
         return True
     u.EnumThreadWindows(thread, collect, 0)
@@ -65,7 +65,7 @@ def wait(test):
     raise AssertionError("Popup condition timed out")
 
 def close():
-    u.PostMessageW(hwnd, 0x1F, 0, 0)  # WM_CANCELMODE: native tracking cancellation
+    u.PostMessageW(popup(), 0x1F, 0, 0)  # WM_CANCELMODE: native tracking cancellation
     wait(lambda: not popup())
 
 def open_menu():
@@ -121,9 +121,36 @@ try:
     report["logical_size"] = [round(width * 96 / dpi), round(height * 96 / dpi)]
     report["rounded_surface"] = True
     # Native menu consumes Escape while tracking; no global keyboard input.
-    u.PostMessageW(hwnd, 0x100, 0x1B, 0)
+    u.PostMessageW(menu, 0x100, 0x1B, 0)
     wait(lambda: not popup())
     report["escape_dismiss"] = True
+    u.GetWindowLongPtrW.argtypes = [w.HWND, c.c_int]
+    u.GetWindowLongPtrW.restype = w.LPARAM
+    u.GetClassLongPtrW.argtypes = [w.HWND, c.c_int]
+    u.GetClassLongPtrW.restype = w.ULONG
+    menu = open_menu()
+    shadow = u.FindWindowW("NanfengCodexQuota.ContextShadow.v1", None)
+    assert shadow and u.IsWindowVisible(shadow)
+    assert not (u.GetWindowLongPtrW(menu, -16) & 0x800000)  # WS_BORDER
+    assert not (u.GetClassLongPtrW(menu, -26) & 0x20000)  # CS_DROPSHADOW
+    assert u.GetWindowLongPtrW(shadow, -20) & 0x80000  # WS_EX_LAYERED
+    assert u.GetWindowLongPtrW(shadow, -20) & 0x20  # WS_EX_TRANSPARENT
+    assert u.GetWindowLongPtrW(shadow, -20) & 0x8000000  # WS_EX_NOACTIVATE
+    close()
+    assert not u.FindWindowW("NanfengCodexQuota.ContextShadow.v1", None)
+    report["separate_shadow_no_native_frame_and_cleanup"] = True
+    menu = open_menu()
+    for key in [0x24, 0x28, 0x0D]:  # Home, Down, Enter: open main
+        u.PostMessageW(menu, 0x100, key, 0)
+    wait(lambda: not popup())
+    main = wait(lambda: u.FindWindowW("NanfengCodexQuota.Settings.v1", None))
+    wait(lambda: u.IsWindowVisible(main))
+    u.PostMessageW(main, 0x10, 0, 0)
+    report["keyboard_open_main"] = True
+    menu = open_menu()
+    u.PostMessageW(menu, 0x111, 100, 0)  # refresh command
+    wait(lambda: not popup())
+    report["native_command_dismiss"] = True
     resources = lambda: [u.GetGuiResources(process, 0), u.GetGuiResources(process, 1)]
     baseline = resources()
     for _ in range(30):
@@ -143,3 +170,4 @@ finally:
     u.SetCursorPos(original.x, original.y)
 (args.output / "menu-qa.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
 print(json.dumps(report))
+

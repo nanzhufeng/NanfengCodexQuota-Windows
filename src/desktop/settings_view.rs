@@ -631,8 +631,7 @@ pub(super) unsafe fn draw_choice(item: &DRAWITEMSTRUCT) {
         );
     }
 }
-pub(super) unsafe fn draw_menu(app: &App, item: &DRAWITEMSTRUCT) {
-    let dpi = app.menu_dpi;
+pub(super) unsafe fn draw_menu(dpi: u32, visible: bool, item: &DRAWITEMSTRUCT) {
     let s = |n| mul_div(n, dpi as i32, 96);
     let r = item.rcItem;
     FillRect(item.hDC, &r, GetStockObject(WHITE_BRUSH) as HBRUSH);
@@ -657,21 +656,13 @@ pub(super) unsafe fn draw_menu(app: &App, item: &DRAWITEMSTRUCT) {
         REFRESH => ("立即刷新", "\u{e72c}"),
         OPEN_SETTINGS => ("打开主界面", "\u{e80f}"),
         TOP => ("保持置顶", "\u{e718}"),
-        HIDE if app.visible => ("隐藏悬浮窗", "\u{e921}"),
+        HIDE if visible => ("隐藏悬浮窗", "\u{e921}"),
         HIDE => ("显示悬浮窗", "\u{e944}"),
         EXIT => ("退出", "\u{e8bb}"),
         _ => return,
     };
     let color = if disabled { MUTED } else { 0xff405362 };
     let label_font = make_font(13, 400, dpi);
-    if item.itemID == EXIT as u32 {
-        let pen = CreatePen(PS_SOLID, 1, colorref(0xffe1e5e7));
-        let old = SelectObject(item.hDC, pen);
-        MoveToEx(item.hDC, r.left + s(12), r.top, null_mut());
-        LineTo(item.hDC, r.right - s(12), r.top);
-        SelectObject(item.hDC, old);
-        DeleteObject(pen);
-    }
     let font = CreateFontW(
         -s(14),
         0,

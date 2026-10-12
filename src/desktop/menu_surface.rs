@@ -1,6 +1,5 @@
 //! Compact native popup geometry adapted from the Mac context card.
 use super::*;
-use windows_sys::Win32::System::Threading::GetCurrentThreadId;
 
 pub(super) const WIDTH: i32 = 190;
 pub(super) const HEIGHT: i32 = 166;
@@ -24,83 +23,6 @@ pub(super) fn centered(width: i32, height: i32, work: RECT) -> RECT {
         right: left + width,
         bottom: top + height,
     }
-}
-
-/// The hook applies only to this UI thread during TrackPopupMenu. Native menu
-/// selection, dismissal, accessibility and capture remain owned by Windows.
-pub(super) struct MenuHook(HHOOK);
-impl MenuHook {
-    pub(super) unsafe fn install() -> Self {
-        Self(SetWindowsHookExW(
-            WH_CBT,
-            Some(created),
-            null_mut(),
-            GetCurrentThreadId(),
-        ))
-    }
-}
-impl Drop for MenuHook {
-    fn drop(&mut self) {
-        if !self.0.is_null() {
-            unsafe {
-                UnhookWindowsHookEx(self.0);
-            }
-        }
-    }
-}
-#[derive(Default)]
-struct Frame {
-    width: i32,
-    height: i32,
-    dpi: u32,
-}
-unsafe extern "system" fn created(code: i32, w: WPARAM, l: LPARAM) -> LRESULT {
-    if code == HCBT_CREATEWND as i32 {
-        let hwnd = w as HWND;
-        let mut name = [0u16; 32];
-        let len = GetClassNameW(hwnd, name.as_mut_ptr(), name.len() as i32);
-        if String::from_utf16_lossy(&name[..len.max(0) as usize]) == "#32768" {
-            let frame = Box::into_raw(Box::new(Frame::default()));
-            if SetWindowSubclass(hwnd, Some(frame_proc), 2, frame as usize) == 0 {
-                drop(Box::from_raw(frame));
-            }
-        }
-    }
-    CallNextHookEx(null_mut(), code, w, l)
-}
-unsafe extern "system" fn frame_proc(
-    hwnd: HWND,
-    msg: u32,
-    w: WPARAM,
-    l: LPARAM,
-    _id: usize,
-    reference: usize,
-) -> LRESULT {
-    if msg == WM_NCDESTROY {
-        RemoveWindowSubclass(hwnd, Some(frame_proc), 2);
-        let result = DefSubclassProc(hwnd, msg, w, l);
-        drop(Box::from_raw(reference as *mut Frame));
-        return result;
-    }
-    let result = DefSubclassProc(hwnd, msg, w, l);
-    if msg == WM_WINDOWPOSCHANGED && IsWindow(hwnd) != 0 {
-        let mut rect: RECT = zeroed();
-        GetWindowRect(hwnd, &mut rect);
-        let dpi = GetDpiForWindow(hwnd).max(96);
-        let frame = &mut *(reference as *mut Frame);
-        let width = rect.right - rect.left;
-        let height = rect.bottom - rect.top;
-        if width > 0 && height > 0 && (frame.width, frame.height, frame.dpi) != (width, height, dpi)
-        {
-            *frame = Frame { width, height, dpi };
-            let diameter = mul_div(22, dpi as i32, 96);
-            let region = CreateRoundRectRgn(0, 0, width + 1, height + 1, diameter, diameter);
-            if !region.is_null() && SetWindowRgn(hwnd, region, 1) == 0 {
-                DeleteObject(region);
-            }
-        }
-    }
-    result
 }
 
 #[cfg(test)]

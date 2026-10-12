@@ -28,6 +28,7 @@ use windows_sys::Win32::{
 };
 
 mod menu_surface;
+mod popup_card;
 mod settings_view;
 
 const TITLE: &str = "南枫 Codex 额度";
@@ -68,7 +69,6 @@ struct App {
     tray: NOTIFYICONDATAW,
     taskbar_created: u32,
     closing: bool,
-    menu_dpi: u32,
 }
 fn wide(text: &str) -> Vec<u16> {
     text.encode_utf16().chain(Some(0)).collect()
@@ -137,7 +137,6 @@ pub fn run() -> Result<()> {
             tray: zeroed(),
             taskbar_created: RegisterWindowMessageW(wide("TaskbarCreated").as_ptr()),
             closing: false,
-            menu_dpi: 96,
         });
         let ptr = (&mut *app) as *mut App;
         let instance = GetModuleHandleW(null());
@@ -301,34 +300,6 @@ unsafe extern "system" fn widget_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM
                 _ => {}
             }
             0
-        }
-        WM_MEASUREITEM => {
-            let item = &mut *(l as *mut MEASUREITEMSTRUCT);
-            if item.CtlType == windows_sys::Win32::UI::Controls::ODT_MENU {
-                let dpi = app.menu_dpi;
-                // Native owner-draw menus add 20 logical pixels of horizontal
-                // gutter and six vertically around the measured row content.
-                item.itemWidth = mul_div(menu_surface::WIDTH - 20, dpi as i32, 96) as u32;
-                item.itemHeight = mul_div(
-                    match item.itemID as usize {
-                        REFRESH => 34,
-                        EXIT => 36,
-                        _ => 30,
-                    },
-                    dpi as i32,
-                    96,
-                ) as u32;
-                return 1;
-            }
-            DefWindowProcW(hwnd, msg, w, l)
-        }
-        WM_DRAWITEM => {
-            let item = &*(l as *const DRAWITEMSTRUCT);
-            if item.CtlType == windows_sys::Win32::UI::Controls::ODT_MENU {
-                settings_view::draw_menu(app, item);
-                return 1;
-            }
-            DefWindowProcW(hwnd, msg, w, l)
         }
         RESTORE => {
             restore_position(app);
@@ -704,69 +675,17 @@ unsafe fn menu(app: &mut App) {
     let mut dpi = GetDpiForWindow(app.widget).max(96);
     let mut dpi_y = dpi;
     GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &mut dpi, &mut dpi_y);
-    app.menu_dpi = dpi.max(96);
-    let anchor = menu_surface::anchor(cursor, info.rcWork, app.menu_dpi);
-    let _skin = menu_surface::MenuHook::install();
-    let menu = CreatePopupMenu();
-    for (id, label, flags) in [
-        (REFRESH, "立即刷新", MF_STRING),
-        (OPEN_SETTINGS, "打开主界面", MF_STRING),
-        (
-            TOP,
-            "保持置顶",
-            if app.config.always_on_top {
-                MF_CHECKED
-            } else {
-                MF_STRING
-            },
-        ),
-        (
-            HIDE,
-            if app.visible {
-                "隐藏悬浮窗"
-            } else {
-                "显示悬浮窗"
-            },
-            MF_STRING,
-        ),
-        (EXIT, "退出", MF_STRING),
-    ] {
-        let label = wide(label);
-        let info = MENUITEMINFOW {
-            cbSize: size_of::<MENUITEMINFOW>() as u32,
-            fMask: MIIM_ID | MIIM_FTYPE | MIIM_STATE | MIIM_STRING,
-            fType: MFT_OWNERDRAW,
-            fState: flags,
-            wID: id as u32,
-            dwTypeData: label.as_ptr() as *mut u16,
-            cch: label.len() as u32 - 1,
-            ..zeroed()
-        };
-        InsertMenuItemW(menu, u32::MAX, 1, &info);
-    }
-    let background = CreateSolidBrush(rgb(255, 255, 255));
-    let info = MENUINFO {
-        cbSize: size_of::<MENUINFO>() as u32,
-        fMask: MIM_BACKGROUND | MIM_STYLE,
-        dwStyle: MNS_NOCHECK,
-        hbrBack: background,
-        ..zeroed()
-    };
-    SetMenuInfo(menu, &info);
-    SetForegroundWindow(app.widget);
-    let choice = TrackPopupMenu(
-        menu,
-        TPM_RETURNCMD | TPM_RIGHTBUTTON,
-        anchor.x,
-        anchor.y,
-        0,
+    let dpi = dpi.max(96);
+    let anchor = menu_surface::anchor(cursor, info.rcWork, dpi);
+    let choice = popup_card::track(
         app.widget,
-        null(),
+        anchor,
+        dpi,
+        app.visible,
+        app.config.always_on_top,
     );
-    DestroyMenu(menu);
-    DeleteObject(background);
     if choice > 0 {
-        command(app, choice as usize);
+        command(app, choice);
     }
     PostMessageW(app.widget, WM_NULL, 0, 0);
 }
