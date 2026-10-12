@@ -1,6 +1,6 @@
 [package]
 name = "nanfeng-codex-quota"
-version = "0.1.7"
+version = "0.1.8"
 edition = "2024"
 license = "Apache-2.0"
 description = "南枫 Codex 额度：Windows 只读额度悬浮窗"

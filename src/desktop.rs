@@ -17,7 +17,11 @@ use std::{
 use windows_sys::Win32::{
     Foundation::*,
     Graphics::Gdi::*,
-    System::{LibraryLoader::GetModuleHandleW, Registry::*, Threading::CreateMutexW},
+    System::{
+        LibraryLoader::GetModuleHandleW,
+        Registry::*,
+        Threading::{CreateMutexW, GetCurrentProcessId},
+    },
     UI::{
         Controls::{BST_CHECKED, DRAWITEMSTRUCT, MEASUREITEMSTRUCT, ODS_SELECTED},
         HiDpi::*,
@@ -69,6 +73,7 @@ struct App {
     tray: NOTIFYICONDATAW,
     taskbar_created: u32,
     closing: bool,
+    dragging: bool,
 }
 fn wide(text: &str) -> Vec<u16> {
     text.encode_utf16().chain(Some(0)).collect()
@@ -137,6 +142,7 @@ pub fn run() -> Result<()> {
             tray: zeroed(),
             taskbar_created: RegisterWindowMessageW(wide("TaskbarCreated").as_ptr()),
             closing: false,
+            dragging: false,
         });
         let ptr = (&mut *app) as *mut App;
         let instance = GetModuleHandleW(null());
@@ -191,6 +197,7 @@ pub fn run() -> Result<()> {
         // Reconcile the actual registry with the setting; never create startup registration just by launching.
         app.config.start_at_login = startup_matches_current_exe();
         SetTimer(app.widget, 1, 30000, None);
+        SetTimer(app.widget, 2, 1000, None);
         let hwnd = app.widget as usize;
         let (worker, events) = Worker::start(app.config.clone(), move || {
             PostMessageW(hwnd as HWND, EVENT, 0, 0);
@@ -259,11 +266,16 @@ unsafe extern "system" fn widget_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM
     };
     if msg == app.taskbar_created && app.taskbar_created != 0 {
         install_tray(app);
+        maintain_widget(app);
         return 0;
     }
     match msg {
         EVENT => {
             drain_events(app);
+            0
+        }
+        WM_TIMER if w == 2 => {
+            maintain_widget(app);
             0
         }
         WM_TIMER => {
@@ -280,7 +292,13 @@ unsafe extern "system" fn widget_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM
             open_settings(app);
             0
         }
+        WM_ENTERSIZEMOVE => {
+            app.dragging = true;
+            0
+        }
         WM_EXITSIZEMOVE => {
+            app.dragging = false;
+            constrain_widget(app);
             save_position(app);
             0
         }
@@ -304,6 +322,10 @@ unsafe extern "system" fn widget_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM
         RESTORE => {
             restore_position(app);
             show_widget(app);
+            0
+        }
+        WM_SETTINGCHANGE => {
+            maintain_widget(app);
             0
         }
         WM_DISPLAYCHANGE => {
@@ -331,6 +353,7 @@ unsafe extern "system" fn widget_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM
         }
         WM_POWERBROADCAST => {
             if w == 7 || w == 18 {
+                maintain_widget(app);
                 refresh(app);
             }
             1
@@ -349,6 +372,7 @@ unsafe extern "system" fn widget_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM
         WM_DESTROY => {
             app.closing = true;
             KillTimer(hwnd, 1);
+            KillTimer(hwnd, 2);
             Shell_NotifyIconW(NIM_DELETE, &app.tray);
             if !app.settings.is_null() {
                 DestroyWindow(app.settings);
@@ -407,6 +431,89 @@ unsafe fn restore_position(app: &mut App) {
         );
         app.config.x = x;
         app.config.y = y;
+    }
+}
+// Read the actual dragged position rather than reusing the last saved position.
+unsafe fn constrain_widget(app: &mut App) {
+    let mut rect: RECT = zeroed();
+    if GetWindowRect(app.widget, &mut rect) == 0 {
+        return;
+    }
+    let monitor = MonitorFromWindow(app.widget, MONITOR_DEFAULTTONEAREST);
+    let mut info = MONITORINFO {
+        cbSize: size_of::<MONITORINFO>() as u32,
+        ..zeroed()
+    };
+    if GetMonitorInfoW(monitor, &mut info) == 0 {
+        return;
+    }
+    let work = info.rcWork;
+    let (x, y) = clamp_position(
+        rect.left,
+        rect.top,
+        app.size,
+        (work.left, work.top, work.right, work.bottom),
+    );
+    if (x, y) != (rect.left, rect.top) {
+        SetWindowPos(
+            app.widget,
+            null_mut(),
+            x,
+            y,
+            0,
+            0,
+            SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+        );
+        save_position(app);
+    }
+}
+// TOPMOST is a band, not a permanent first place. Recover only when an
+// overlapping external window precedes us; never activate or fight our own UI.
+unsafe fn maintain_widget(app: &mut App) {
+    if app.closing || app.dragging || !app.visible || IsWindowVisible(app.widget) == 0 {
+        return;
+    }
+    let popup = FindWindowW(wide("NanfengCodexQuota.Context.v1").as_ptr(), null());
+    if !popup.is_null() {
+        return;
+    }
+    constrain_widget(app);
+    if !app.config.always_on_top {
+        return;
+    }
+    let mut rect: RECT = zeroed();
+    if GetWindowRect(app.widget, &mut rect) == 0 {
+        return;
+    }
+    let mut raise = GetWindowLongPtrW(app.widget, GWL_EXSTYLE) as u32 & WS_EX_TOPMOST == 0;
+    let mut previous = GetWindow(app.widget, GW_HWNDPREV);
+    let own_pid = GetCurrentProcessId();
+    while !previous.is_null() && !raise {
+        let mut pid = 0;
+        GetWindowThreadProcessId(previous, &mut pid);
+        if pid != own_pid && IsWindowVisible(previous) != 0 && IsIconic(previous) == 0 {
+            let mut other: RECT = zeroed();
+            if GetWindowRect(previous, &mut other) != 0
+                && other.left < rect.right
+                && other.right > rect.left
+                && other.top < rect.bottom
+                && other.bottom > rect.top
+            {
+                raise = true;
+            }
+        }
+        previous = GetWindow(previous, GW_HWNDPREV);
+    }
+    if raise {
+        SetWindowPos(
+            app.widget,
+            HWND_TOPMOST,
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+        );
     }
 }
 unsafe fn save_position(app: &mut App) {
