@@ -130,7 +130,9 @@ try:
         open_menu()
         close()
     after = resources()
-    assert after == baseline, (baseline, after)
+    # Windows may release cached menu/caption resources between observations.
+    # The lifecycle contract forbids growth; a decrease is valid cleanup.
+    assert all(end <= start for start, end in zip(baseline, after)), (baseline, after)
     report["repeat_open_close"] = 30
     report["gdi_user_before"] = baseline
     report["gdi_user_after"] = after
