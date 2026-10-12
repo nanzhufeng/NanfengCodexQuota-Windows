@@ -19,7 +19,11 @@ const HIGH_SIZE: usize = OUTPUT_SIZE * SCALE;
 const CONTENT_PADDING: f32 = 8.0;
 const CENTER_X: f32 = 58.0 + CONTENT_PADDING;
 const CENTER_Y: f32 = 56.0 + CONTENT_PADDING;
-const RING_RADIUS: f32 = 51.0;
+// Widen only outward: the original inner edge stays at 47.4 points.
+const RING_INNER_EDGE: f32 = 47.4;
+const RING_OUTER_EDGE: f32 = 57.6;
+const RING_RADIUS: f32 = (RING_INNER_EDGE + RING_OUTER_EDGE) / 2.0;
+const RING_HALF_WIDTH: f32 = (RING_OUTER_EDGE - RING_INNER_EDGE) / 2.0;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WeeklyQuotaRenderModel {
@@ -58,11 +62,25 @@ pub fn render_weekly_quota_base(model: &WeeklyQuotaRenderModel) -> Vec<u8> {
     render_impl(model, false)
 }
 
+/// Retina host export; retains exactly the same logical artwork and alpha.
+pub fn render_weekly_quota_base_at_scale(model: &WeeklyQuotaRenderModel, scale: usize) -> Vec<u8> {
+    render_impl_at_scale(model, false, if scale >= 2 { 2 } else { 1 })
+}
+
 fn render_impl(model: &WeeklyQuotaRenderModel, labels: bool) -> Vec<u8> {
+    render_impl_at_scale(model, labels, 1)
+}
+fn render_impl_at_scale(
+    model: &WeeklyQuotaRenderModel,
+    labels: bool,
+    output_scale: usize,
+) -> Vec<u8> {
     let mut canvas = Canvas::new();
 
     draw_shadow(&mut canvas);
     draw_outer_ambient_glow(&mut canvas);
+    draw_inner_disc(&mut canvas);
+    draw_inner_highlight(&mut canvas);
     draw_track(&mut canvas);
     if let Some(remaining) = model.remaining_percent {
         draw_available_glow(&mut canvas, remaining);
@@ -72,14 +90,12 @@ fn render_impl(model: &WeeklyQuotaRenderModel, labels: bool) -> Vec<u8> {
                 &mut canvas,
                 CENTER_X,
                 CENTER_Y - RING_RADIUS,
-                3.6,
+                RING_HALF_WIDTH,
                 available_color(0.0),
                 1.0,
             );
         }
     }
-    draw_inner_disc(&mut canvas);
-    draw_inner_highlight(&mut canvas);
     if let Some(remaining) = model.remaining_percent {
         draw_endpoint(&mut canvas, remaining);
     }
@@ -88,7 +104,7 @@ fn render_impl(model: &WeeklyQuotaRenderModel, labels: bool) -> Vec<u8> {
         draw_labels(&mut canvas, model);
     }
 
-    canvas.downsample_bgra()
+    canvas.downsample_bgra(output_scale)
 }
 
 struct Canvas {
@@ -125,22 +141,24 @@ impl Canvas {
         destination[3] = source[3] + destination[3] * keep;
     }
 
-    fn downsample_bgra(self) -> Vec<u8> {
-        let mut output = vec![0; OUTPUT_SIZE * OUTPUT_SIZE * 4];
-        for y in 0..OUTPUT_SIZE {
-            for x in 0..OUTPUT_SIZE {
+    fn downsample_bgra(self, output_scale: usize) -> Vec<u8> {
+        let side = OUTPUT_SIZE * output_scale;
+        let samples = SCALE / output_scale;
+        let mut output = vec![0; side * side * 4];
+        for y in 0..side {
+            for x in 0..side {
                 let mut sum = [0.0; 4];
-                for sample_y in 0..SCALE {
-                    for sample_x in 0..SCALE {
-                        let source =
-                            self.pixels[(y * SCALE + sample_y) * HIGH_SIZE + x * SCALE + sample_x];
+                for sample_y in 0..samples {
+                    for sample_x in 0..samples {
+                        let source = self.pixels
+                            [(y * samples + sample_y) * HIGH_SIZE + x * samples + sample_x];
                         for channel in 0..4 {
                             sum[channel] += source[channel];
                         }
                     }
                 }
-                let divisor = (SCALE * SCALE) as f32;
-                let offset = (y * OUTPUT_SIZE + x) * 4;
+                let divisor = (samples * samples) as f32;
+                let offset = (y * side + x) * 4;
                 // UpdateLayeredWindow expects premultiplied BGRA.
                 output[offset] = to_byte(sum[2] / divisor);
                 output[offset + 1] = to_byte(sum[1] / divisor);
@@ -158,8 +176,8 @@ fn draw_shadow(canvas: &mut Canvas) {
             let distance = distance(px, py, CENTER_X, CENTER_Y + 4.0);
             let outside = (distance - 51.5).max(0.0);
             if outside < 11.0 {
-                let alpha = 0.42 * (-outside * outside / 36.0).exp();
-                canvas.blend(x, y, [64, 12, 8], alpha);
+                let alpha = 0.30 * (-outside * outside / 36.0).exp();
+                canvas.blend(x, y, [24, 14, 18], alpha);
             }
         },
         canvas,
@@ -171,7 +189,7 @@ fn draw_outer_ambient_glow(canvas: &mut Canvas) {
         |canvas, x, y, px, py| {
             let ring_distance = (distance(px, py, CENTER_X, CENTER_Y) - RING_RADIUS).abs();
             if ring_distance < 11.0 {
-                let alpha = 0.11 * (-(ring_distance - 3.0).max(0.0).powi(2) / 18.0).exp();
+                let alpha = 0.025 * (-(ring_distance - 3.0).max(0.0).powi(2) / 18.0).exp();
                 canvas.blend(x, y, [255, 68, 16], alpha);
             }
         },
@@ -180,7 +198,7 @@ fn draw_outer_ambient_glow(canvas: &mut Canvas) {
 }
 
 fn draw_track(canvas: &mut Canvas) {
-    draw_ring(canvas, |_progress| Some(([112, 37, 43], 0.98)));
+    draw_ring(canvas, |_progress| Some(([65, 37, 45], 1.0)));
 }
 
 fn draw_available_glow(canvas: &mut Canvas, remaining: u8) {
@@ -198,7 +216,7 @@ fn draw_available_glow(canvas: &mut Canvas, remaining: u8) {
             }
             let ring_distance = (dx.hypot(dy) - RING_RADIUS).abs();
             if ring_distance < 10.0 {
-                let alpha = 0.24 * (-(ring_distance - 2.8).max(0.0).powi(2) / 8.0).exp();
+                let alpha = 0.06 * (-(ring_distance - 2.8).max(0.0).powi(2) / 8.0).exp();
                 let color = available_color((progress / fraction).clamp(0.0, 1.0));
                 canvas.blend(x, y, color, alpha);
             }
@@ -225,7 +243,7 @@ fn draw_ring(canvas: &mut Canvas, mut paint: impl FnMut(f32) -> Option<([u8; 3],
             let dx = px - CENTER_X;
             let dy = py - CENTER_Y;
             let signed = (dx.hypot(dy) - RING_RADIUS).abs();
-            let coverage = (3.6 - signed).clamp(0.0, 1.0);
+            let coverage = (RING_HALF_WIDTH - signed).clamp(0.0, 1.0);
             if coverage <= 0.0 {
                 continue;
             }
@@ -242,19 +260,21 @@ fn draw_inner_disc(canvas: &mut Canvas) {
             let dx = px - CENTER_X;
             let dy = py - CENTER_Y;
             let distance = dx.hypot(dy);
-            let coverage = (46.3 - distance).clamp(0.0, 1.0);
+            // Overlap the ring's opaque inner edge to fill the seam, but keep
+            // the dark disc away from its outer antialiasing and soft shadow.
+            let coverage = (RING_INNER_EDGE + 2.0 - distance).clamp(0.0, 1.0);
             if coverage <= 0.0 {
                 return;
             }
-            let vertical = ((py - (CENTER_Y - 46.3)) / 92.6).clamp(0.0, 1.0);
-            let radial = (distance / 46.3).clamp(0.0, 1.0);
-            let top = [60.0, 25.0, 29.0];
-            let bottom = [20.0, 11.0, 17.0];
+            let vertical = ((py - (CENTER_Y - 54.6)) / 109.2).clamp(0.0, 1.0);
+            let radial = (distance / 54.6).clamp(0.0, 1.0);
+            let top = [36.0, 7.0, 15.0];
+            let bottom = [27.0, 3.0, 9.0];
             let mut color = lerp_color(top, bottom, vertical * 0.78 + radial * 0.22);
             let warm = 1.0 - ((dx + 14.0).hypot(dy + 18.0) / 62.0).clamp(0.0, 1.0);
-            color[0] = (f32::from(color[0]) + warm * 12.0).min(255.0) as u8;
-            color[1] = (f32::from(color[1]) + warm * 4.0).min(255.0) as u8;
-            canvas.blend(x, y, color, coverage * 0.98);
+            color[0] = (f32::from(color[0]) + warm * 2.0).min(255.0) as u8;
+            color[1] = (f32::from(color[1]) + warm * 1.0).min(255.0) as u8;
+            canvas.blend(x, y, color, coverage);
         },
         canvas,
     );
@@ -266,7 +286,7 @@ fn draw_inner_highlight(canvas: &mut Canvas) {
             let normalized = ((px - (CENTER_X - 12.0)) / 34.0).powi(2)
                 + ((py - (CENTER_Y - 22.0)) / 15.0).powi(2);
             if normalized < 1.0 && distance(px, py, CENTER_X, CENTER_Y) < 43.8 {
-                canvas.blend(x, y, [255, 167, 116], (1.0 - normalized) * 0.11);
+                canvas.blend(x, y, [255, 255, 255], (1.0 - normalized) * 0.025);
             }
         },
         canvas,
@@ -325,7 +345,7 @@ fn draw_refresh_pill(canvas: &mut Canvas, typography: Typography) {
         typography.refresh_pill_width,
         typography.refresh_pill_height,
         typography.refresh_pill_height / 2.0,
-        [113, 47, 35],
+        [65, 39, 46],
         0.82,
     );
     draw_rounded_rect(
@@ -335,7 +355,7 @@ fn draw_refresh_pill(canvas: &mut Canvas, typography: Typography) {
         typography.refresh_pill_width - 2.0,
         typography.refresh_pill_height - 2.0,
         (typography.refresh_pill_height - 2.0) / 2.0,
-        [45, 20, 21],
+        [65, 39, 46],
         0.92,
     );
 }
@@ -351,7 +371,7 @@ fn draw_labels(canvas: &mut Canvas, model: &WeeklyQuotaRenderModel) {
             19.0 + CONTENT_PADDING,
             30.0,
             36.0,
-            [255, 247, 240],
+            [255, 255, 255],
             1.0,
         );
     }
@@ -375,7 +395,7 @@ fn draw_labels(canvas: &mut Canvas, model: &WeeklyQuotaRenderModel) {
             typography.refresh_top + CONTENT_PADDING,
             typography.refresh_font_size,
             typography.refresh_height,
-            [255, 207, 166],
+            [235, 225, 228],
             0.98,
         );
     }
@@ -495,13 +515,13 @@ fn arc_contains(progress: f32, fraction: f32) -> bool {
 }
 
 fn available_color(progress: f32) -> [u8; 3] {
-    if progress < 0.48 {
-        lerp_color([255.0, 188.0, 25.0], [255.0, 101.0, 10.0], progress / 0.48)
+    if progress < 0.52 {
+        lerp_color([255.0, 59.0, 69.0], [255.0, 128.0, 31.0], progress / 0.52)
     } else {
         lerp_color(
-            [255.0, 101.0, 10.0],
-            [255.0, 48.0, 28.0],
-            (progress - 0.48) / 0.52,
+            [255.0, 128.0, 31.0],
+            [255.0, 194.0, 20.0],
+            (progress - 0.52) / 0.48,
         )
     }
 }
@@ -582,6 +602,20 @@ mod tests {
 
     fn pixel_alpha(pixels: &[u8], x: usize, y: usize) -> u8 {
         pixels[(y * OUTPUT_SIZE + x) * 4 + 3]
+    }
+    #[test]
+    fn mac_palette_has_an_opaque_dark_disc_and_a_wide_color_band_without_black_border() {
+        let pixels = super::render_weekly_quota_base(&WeeklyQuotaRenderModel::preview(100));
+        let center = (64 * OUTPUT_SIZE + 66) * 4;
+        assert_eq!(pixels[center + 3], 255);
+        assert!(pixels[center..center + 3].iter().all(|v| *v < 80));
+        for y in [117, 118, 119, 120] {
+            let offset = (y * OUTPUT_SIZE + 66) * 4;
+            assert!(pixels[offset + 2] > 190 && pixels[offset + 1] > 40);
+            assert!(pixels[offset + 3] > 240);
+        }
+        assert!(pixel_alpha(&pixels, 66, 123) < 100);
+        assert!(pixel_alpha(&pixels, 0, 0) < 20);
     }
 
     fn pixel_luma(pixels: &[u8], x: usize, y: usize) -> u16 {

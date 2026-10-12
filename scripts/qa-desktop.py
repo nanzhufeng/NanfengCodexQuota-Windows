@@ -16,6 +16,8 @@ parser.add_argument("--output", type=pathlib.Path, required=True)
 args = parser.parse_args()
 args.output.mkdir(parents=True, exist_ok=True)
 u = c.windll.user32
+u.SetProcessDpiAwarenessContext.argtypes = [c.c_void_p]
+u.SetProcessDpiAwarenessContext(c.c_void_p(-4))
 k = c.windll.kernel32
 u.FindWindowW.argtypes = [w.LPCWSTR, w.LPCWSTR]
 u.FindWindowW.restype = w.HWND
@@ -89,6 +91,36 @@ assert not u.GetDlgItem(settings, 501), "Removed brand heading is still present"
 u.SendMessageW(hwnd, 0x8000 + 11, 0, 0x203)
 assert u.FindWindowW("NanfengCodexQuota.Settings.v1", None) == settings, "Double-click duplicated the main window"
 report["tray_double_click"] = True
+class MonitorInfo(c.Structure):
+    _fields_ = [("size", w.DWORD), ("monitor", w.RECT), ("work", w.RECT), ("flags", w.DWORD)]
+u.GetCursorPos.argtypes = [c.POINTER(w.POINT)]
+u.MonitorFromPoint.argtypes = [w.POINT, w.DWORD]
+u.MonitorFromPoint.restype = w.HANDLE
+u.GetMonitorInfoW.argtypes = [w.HANDLE, c.POINTER(MonitorInfo)]
+u.MonitorFromWindow.argtypes = [w.HWND, w.DWORD]
+u.MonitorFromWindow.restype = w.HANDLE
+point = w.POINT()
+u.GetCursorPos(c.byref(point))
+info = MonitorInfo(size=c.sizeof(MonitorInfo))
+assert u.GetMonitorInfoW(u.MonitorFromPoint(point, 2), c.byref(info))
+def assert_centered():
+    assert u.GetMonitorInfoW(u.MonitorFromWindow(settings, 2), c.byref(info))
+    rect = w.RECT()
+    u.GetWindowRect(settings, c.byref(rect))
+    assert abs(rect.left + rect.right - info.work.left - info.work.right) <= 2
+    assert abs(rect.top + rect.bottom - info.work.top - info.work.bottom) <= 2
+    assert rect.left >= info.work.left and rect.top >= info.work.top
+    assert rect.right <= info.work.right and rect.bottom <= info.work.bottom
+assert_centered()
+u.SetWindowPos(settings, None, info.work.left + 25, info.work.top + 30, 0, 0, 0x1 | 0x4 | 0x10)
+command(hwnd, 101)
+assert_centered()
+report["main_centered_on_open"] = True
+u.SendMessageW(settings, 0x10, 0, 0)
+u.SendMessageW(hwnd, 0x203, 0, 0)
+settings = wait_until(lambda: (s := u.FindWindowW("NanfengCodexQuota.Settings.v1", None)) and u.IsWindowVisible(s) and s)
+assert_centered()
+report["widget_double_click"] = True
 command(hwnd, 101)
 settings = wait_until(lambda: u.FindWindowW("NanfengCodexQuota.Settings.v1", None))
 command(settings, 301)

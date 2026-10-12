@@ -632,7 +632,7 @@ pub(super) unsafe fn draw_choice(item: &DRAWITEMSTRUCT) {
     }
 }
 pub(super) unsafe fn draw_menu(app: &App, item: &DRAWITEMSTRUCT) {
-    let dpi = GetDpiForWindow(app.widget).max(96);
+    let dpi = app.menu_dpi;
     let s = |n| mul_div(n, dpi as i32, 96);
     let r = item.rcItem;
     FillRect(item.hDC, &r, GetStockObject(WHITE_BRUSH) as HBRUSH);
@@ -648,8 +648,8 @@ pub(super) unsafe fn draw_menu(app: &App, item: &DRAWITEMSTRUCT) {
                 (r.right - r.left - s(12)) as f32,
                 (r.bottom - r.top - s(6)) as f32,
             ),
-            s(8) as f32,
-            0xffeef7f2,
+            s(6) as f32,
+            0xfff0f2f1,
             None,
         );
     }
@@ -662,15 +662,18 @@ pub(super) unsafe fn draw_menu(app: &App, item: &DRAWITEMSTRUCT) {
         EXIT => ("退出", "\u{e8bb}"),
         _ => return,
     };
-    let color = if disabled {
-        MUTED
-    } else if checked {
-        GREEN
-    } else {
-        0xff405362
-    };
+    let color = if disabled { MUTED } else { 0xff405362 };
+    let label_font = make_font(13, 400, dpi);
+    if item.itemID == EXIT as u32 {
+        let pen = CreatePen(PS_SOLID, 1, colorref(0xffe1e5e7));
+        let old = SelectObject(item.hDC, pen);
+        MoveToEx(item.hDC, r.left + s(12), r.top, null_mut());
+        LineTo(item.hDC, r.right - s(12), r.top);
+        SelectObject(item.hDC, old);
+        DeleteObject(pen);
+    }
     let font = CreateFontW(
-        -s(18),
+        -s(14),
         0,
         0,
         0,
@@ -690,8 +693,8 @@ pub(super) unsafe fn draw_menu(app: &App, item: &DRAWITEMSTRUCT) {
         font,
         glyph,
         RECT {
-            left: r.left + s(16),
-            right: r.left + s(38),
+            left: r.left + s(25),
+            right: r.left + s(39),
             ..r
         },
         color,
@@ -700,11 +703,11 @@ pub(super) unsafe fn draw_menu(app: &App, item: &DRAWITEMSTRUCT) {
     DeleteObject(font);
     text(
         item.hDC,
-        app.font,
+        label_font,
         label,
         RECT {
-            left: r.left + s(52),
-            right: r.right - s(30),
+            left: r.left + s(48),
+            right: r.right - s(8),
             ..r
         },
         color,
@@ -713,16 +716,18 @@ pub(super) unsafe fn draw_menu(app: &App, item: &DRAWITEMSTRUCT) {
     if checked {
         text(
             item.hDC,
-            app.font,
+            label_font,
             "✓",
             RECT {
-                left: r.right - s(28),
+                left: r.left + s(6),
+                right: r.left + s(20),
                 ..r
             },
             GREEN,
             DT_VCENTER | DT_SINGLELINE,
         );
     }
+    DeleteObject(label_font);
 }
 unsafe fn draw_control(hwnd: HWND, dc: HDC, data: &Control) {
     let mut rect: RECT = zeroed();

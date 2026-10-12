@@ -27,6 +27,7 @@ use windows_sys::Win32::{
     },
 };
 
+mod menu_surface;
 mod settings_view;
 
 const TITLE: &str = "南枫 Codex 额度";
@@ -67,6 +68,7 @@ struct App {
     tray: NOTIFYICONDATAW,
     taskbar_created: u32,
     closing: bool,
+    menu_dpi: u32,
 }
 fn wide(text: &str) -> Vec<u16> {
     text.encode_utf16().chain(Some(0)).collect()
@@ -135,6 +137,7 @@ pub fn run() -> Result<()> {
             tray: zeroed(),
             taskbar_created: RegisterWindowMessageW(wide("TaskbarCreated").as_ptr()),
             closing: false,
+            menu_dpi: 96,
         });
         let ptr = (&mut *app) as *mut App;
         let instance = GetModuleHandleW(null());
@@ -155,6 +158,7 @@ pub fn run() -> Result<()> {
         ] {
             let class_name = wide(name);
             let wc = WNDCLASSW {
+                style: if name == CLASS { CS_DBLCLKS } else { 0 },
                 lpfnWndProc: proc,
                 hInstance: instance,
                 lpszClassName: class_name.as_ptr(),
@@ -273,6 +277,10 @@ unsafe extern "system" fn widget_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM
             SendMessageW(hwnd, WM_NCLBUTTONDOWN, HTCAPTION as usize, 0);
             0
         }
+        WM_LBUTTONDBLCLK | WM_NCLBUTTONDBLCLK => {
+            open_settings(app);
+            0
+        }
         WM_EXITSIZEMOVE => {
             save_position(app);
             0
@@ -297,9 +305,19 @@ unsafe extern "system" fn widget_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM
         WM_MEASUREITEM => {
             let item = &mut *(l as *mut MEASUREITEMSTRUCT);
             if item.CtlType == windows_sys::Win32::UI::Controls::ODT_MENU {
-                let dpi = GetDpiForWindow(hwnd).max(96);
-                item.itemWidth = mul_div(224, dpi as i32, 96) as u32;
-                item.itemHeight = mul_div(44, dpi as i32, 96) as u32;
+                let dpi = app.menu_dpi;
+                // Native owner-draw menus add 20 logical pixels of horizontal
+                // gutter and six vertically around the measured row content.
+                item.itemWidth = mul_div(menu_surface::WIDTH - 20, dpi as i32, 96) as u32;
+                item.itemHeight = mul_div(
+                    match item.itemID as usize {
+                        REFRESH => 34,
+                        EXIT => 36,
+                        _ => 30,
+                    },
+                    dpi as i32,
+                    96,
+                ) as u32;
                 return 1;
             }
             DefWindowProcW(hwnd, msg, w, l)
@@ -581,9 +599,9 @@ unsafe fn draw_native_labels(base: &mut [u8], model: &WeeklyQuotaRenderModel) ->
     std::ptr::write_bytes(bits, 0, (side * side * 4) as usize);
     SetTextColor(dc, rgb(255, 255, 255));
     SetBkMode(dc, TRANSPARENT as i32);
-    for (text, px, top, bottom, weight) in [
-        (&model.percent_label, 30, 27, 64, 600),
-        (&model.refresh_label, 11, 68, 88, 400),
+    for (text, px, top, bottom, weight, left, right) in [
+        (&model.percent_label, 30, 27, 64, 600, 28, 104),
+        (&model.refresh_label, 11, 68, 88, 400, 23, 109),
     ] {
         let font = CreateFontW(
             -(px * SCALE as i32),
@@ -603,9 +621,9 @@ unsafe fn draw_native_labels(base: &mut [u8], model: &WeeklyQuotaRenderModel) ->
         );
         let old = SelectObject(dc, font);
         let mut r = RECT {
-            left: 28 * SCALE as i32,
+            left: left * SCALE as i32,
             top: top * SCALE as i32,
-            right: 104 * SCALE as i32,
+            right: right * SCALE as i32,
             bottom: bottom * SCALE as i32,
         };
         DrawTextW(
@@ -631,7 +649,12 @@ unsafe fn draw_native_labels(base: &mut [u8], model: &WeeklyQuotaRenderModel) ->
             }
             let alpha = total / 16;
             let i = (y * OUTPUT_SIZE + x) * 4;
-            for (channel, color) in [211u32, 231, 255].into_iter().enumerate() {
+            let ink = if y >= 68 {
+                [228u32, 225, 235]
+            } else {
+                [255, 255, 255]
+            };
+            for (channel, color) in ink.into_iter().enumerate() {
                 base[i + channel] =
                     ((color * alpha + u32::from(base[i + channel]) * (255 - alpha)) / 255) as u8;
             }
@@ -672,6 +695,18 @@ unsafe fn update_tray(app: &mut App) {
     Shell_NotifyIconW(NIM_MODIFY, &app.tray);
 }
 unsafe fn menu(app: &mut App) {
+    let mut cursor: POINT = zeroed();
+    GetCursorPos(&mut cursor);
+    let monitor = MonitorFromPoint(cursor, MONITOR_DEFAULTTONEAREST);
+    let mut info: MONITORINFO = zeroed();
+    info.cbSize = size_of::<MONITORINFO>() as u32;
+    GetMonitorInfoW(monitor, &mut info);
+    let mut dpi = GetDpiForWindow(app.widget).max(96);
+    let mut dpi_y = dpi;
+    GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &mut dpi, &mut dpi_y);
+    app.menu_dpi = dpi.max(96);
+    let anchor = menu_surface::anchor(cursor, info.rcWork, app.menu_dpi);
+    let _skin = menu_surface::MenuHook::install();
     let menu = CreatePopupMenu();
     for (id, label, flags) in [
         (REFRESH, "立即刷新", MF_STRING),
@@ -712,19 +747,18 @@ unsafe fn menu(app: &mut App) {
     let background = CreateSolidBrush(rgb(255, 255, 255));
     let info = MENUINFO {
         cbSize: size_of::<MENUINFO>() as u32,
-        fMask: MIM_BACKGROUND,
+        fMask: MIM_BACKGROUND | MIM_STYLE,
+        dwStyle: MNS_NOCHECK,
         hbrBack: background,
         ..zeroed()
     };
     SetMenuInfo(menu, &info);
-    let mut cursor: POINT = zeroed();
-    GetCursorPos(&mut cursor);
     SetForegroundWindow(app.widget);
     let choice = TrackPopupMenu(
         menu,
         TPM_RETURNCMD | TPM_RIGHTBUTTON,
-        cursor.x,
-        cursor.y,
+        anchor.x,
+        anchor.y,
         0,
         app.widget,
         null(),
@@ -775,6 +809,7 @@ unsafe fn write_diagnostics(app: &App) {
 unsafe fn open_settings(app: &mut App) {
     if !app.settings.is_null() {
         ShowWindow(app.settings, SW_RESTORE);
+        center_main_window(app.settings);
         // An explicit user action must show the window even after a hidden launcher startup.
         SetWindowPos(
             app.settings,
@@ -807,6 +842,7 @@ unsafe fn open_settings(app: &mut App) {
     );
     settings_view::configure_chrome(app.settings);
     rebuild_settings(app);
+    center_main_window(app.settings);
     ShowWindow(app.settings, SW_SHOW);
     SetWindowPos(
         app.settings,
@@ -818,6 +854,36 @@ unsafe fn open_settings(app: &mut App) {
         SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_SHOWWINDOW,
     );
     SetForegroundWindow(app.settings);
+}
+unsafe fn center_main_window(hwnd: HWND) {
+    let mut cursor: POINT = zeroed();
+    GetCursorPos(&mut cursor);
+    let mut info: MONITORINFO = zeroed();
+    info.cbSize = size_of::<MONITORINFO>() as u32;
+    if GetMonitorInfoW(
+        MonitorFromPoint(cursor, MONITOR_DEFAULTTONEAREST),
+        &mut info,
+    ) == 0
+    {
+        return;
+    }
+    // Moving across monitors can synchronously change the physical DPI and size.
+    // A second pass centers the final native size after WM_DPICHANGED.
+    for _ in 0..2 {
+        let mut rect: RECT = zeroed();
+        GetWindowRect(hwnd, &mut rect);
+        let rect =
+            menu_surface::centered(rect.right - rect.left, rect.bottom - rect.top, info.rcWork);
+        SetWindowPos(
+            hwnd,
+            null_mut(),
+            rect.left,
+            rect.top,
+            rect.right - rect.left,
+            rect.bottom - rect.top,
+            SWP_NOZORDER,
+        );
+    }
 }
 unsafe fn rebuild_settings(app: &mut App) {
     settings_view::rebuild(app);
