@@ -45,7 +45,7 @@
 
 ## Sync & Safety
 - Observed at: 2026-10-15 12:28 +08:00
-- Docs: OK；开发与验收规则见 DEVELOPMENT.md，README 预览来自公开 v0.1.8，尚未更新为本机 v0.1.9。
+- Docs: OK；开发与验收规则见 DEVELOPMENT.md，README 预览已更新为实际运行的 v0.1.9；GitHub 发布以 v0.1.9 标签及下载校验收据为准。
 - Git: CLEAN（已验证代码基线）；本状态文件后续仅文档提交不改变该验证基线。
 - Remote: LOCAL ONLY（v0.1.9）；Windows远端当前状态 UNKNOWN。
 - Rollback point: 360f03cfbaddd2d69d13eed9a24dd8cf7c728084（已验证 v0.1.8）。
