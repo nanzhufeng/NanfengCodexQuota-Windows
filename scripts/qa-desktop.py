@@ -57,7 +57,7 @@ def widget():
 
 
 def diagnostics():
-    return json.loads((root / "diagnostics.json").read_text(encoding="utf-8"))
+    return wait_until(lambda: json.loads((root / "diagnostics.json").read_text(encoding="utf-8")))
 
 
 def command(hwnd, identifier):
