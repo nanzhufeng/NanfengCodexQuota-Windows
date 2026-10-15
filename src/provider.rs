@@ -43,19 +43,35 @@ impl Provider {
             if self.cancellation.load(std::sync::atomic::Ordering::Relaxed) {
                 break;
             }
-            match CodexClient::new(&path)
-                .with_timeout(Duration::from_secs(8))
-                .with_cancellation(self.cancellation.clone())
-                .read_rate_limits()
-            {
-                Ok(limits) => {
-                    self.cached = Some(path.clone());
-                    return Ok((limits, path.display().to_string()));
-                }
-                Err(error) => {
-                    failure = classify(&format!("{error:#}"));
-                    if matches!(failure, Failure::NotAuthenticated | Failure::Network) {
-                        return Err(failure);
+            // One bounded retry absorbs transient transport failures without
+            // emitting a failed UI snapshot between attempts. Never retry auth.
+            for attempt in 0..2 {
+                match CodexClient::new(&path)
+                    .with_timeout(Duration::from_secs(8))
+                    .with_cancellation(self.cancellation.clone())
+                    .read_rate_limits()
+                {
+                    Ok(limits) => {
+                        self.cached = Some(path.clone());
+                        return Ok((limits, path.display().to_string()));
+                    }
+                    Err(error) => {
+                        failure = classify(&format!("{error:#}"));
+                        let transient = matches!(failure, Failure::Network | Failure::Timeout);
+                        if transient && attempt == 0 {
+                            for _ in 0..25 {
+                                if self.cancellation.load(std::sync::atomic::Ordering::Relaxed) {
+                                    return Err(failure);
+                                }
+                                std::thread::sleep(Duration::from_millis(20));
+                            }
+                            continue;
+                        }
+                        if transient || failure == Failure::NotAuthenticated {
+                            self.cached = None;
+                            return Err(failure);
+                        }
+                        break;
                     }
                 }
             }

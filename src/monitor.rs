@@ -42,24 +42,40 @@ impl Monitor {
         self.refreshing = false;
     }
     pub fn stale(&self, now: DateTime<Utc>, interval: u64) -> bool {
-        self.failure.is_some()
-            || self.limits.as_ref().is_some_and(|l| {
-                (now - l.sampled_at).num_seconds() > (interval * 2).max(120) as i64
-            })
+        self.limits
+            .as_ref()
+            .is_some_and(|l| (now - l.sampled_at).num_seconds() > (interval * 2).max(120) as i64)
+    }
+    pub fn actionable_failure(&self) -> Option<Failure> {
+        self.failure
+            .filter(|f| !matches!(f, Failure::Network | Failure::Timeout))
+    }
+    pub fn status_label(&self, now: DateTime<Utc>, interval: u64) -> &'static str {
+        if let Some(f) = self.actionable_failure() {
+            f.label()
+        } else if self.stale(now, interval) {
+            "数据过期"
+        } else if self.limits.is_some() && self.failure.is_some() {
+            "最近更新"
+        } else if self.limits.is_some() {
+            "已连接"
+        } else {
+            "等待查询"
+        }
     }
     pub fn render_model(&self, now: DateTime<Utc>, interval: u64) -> WeeklyQuotaRenderModel {
         let remaining = self
             .limits
             .as_ref()
             .and_then(|l| l.secondary.remaining_percent());
-        let label = if let Some(f) = self.failure {
+        let label = if let Some(f) = self.actionable_failure() {
             f.label().to_string()
         } else if self.stale(now, interval) {
             "数据过期".into()
         } else if let Some(l) = &self.limits {
             format!(
                 "更新 {}",
-                l.sampled_at.with_timezone(&Local).format("%H:%M:%S")
+                l.sampled_at.with_timezone(&Local).format("%H:%M")
             )
         } else {
             "等待查询".into()
@@ -74,15 +90,7 @@ impl Monitor {
         }
     }
     pub fn details(&self, now: DateTime<Utc>, interval: u64) -> String {
-        let status = if let Some(f) = self.failure {
-            f.label()
-        } else if self.stale(now, interval) {
-            "数据过期"
-        } else if self.limits.is_some() {
-            "正常"
-        } else {
-            "等待查询"
-        };
+        let status = self.status_label(now, interval);
         let Some(l) = &self.limits else {
             return format!("状态：{status}\n只读监控，不发起 AI 请求");
         };
@@ -100,7 +108,7 @@ impl Monitor {
             "状态：{status}\n周额度：{}\n五小时：{}\n最近成功：{}",
             describe(&l.secondary),
             describe(&l.primary),
-            l.sampled_at.with_timezone(&Local).format("%m-%d %H:%M:%S")
+            l.sampled_at.with_timezone(&Local).format("%m-%d %H:%M")
         )
     }
 }
@@ -108,7 +116,12 @@ pub fn retry_delay(interval: u64, failures: u32) -> u64 {
     if failures == 0 {
         interval
     } else {
-        interval.saturating_mul(1u64 << failures.min(3)).min(600)
+        match failures {
+            1 => 5,
+            2 => 15,
+            3 => 30,
+            n => 60u64.saturating_mul(1u64 << (n - 4).min(3)).min(300),
+        }
     }
 }
 pub fn clamp_position(x: i32, y: i32, size: i32, work: (i32, i32, i32, i32)) -> (i32, i32) {
@@ -123,6 +136,43 @@ pub fn clamp_position(x: i32, y: i32, size: i32, work: (i32, i32, i32, i32)) -> 
 mod tests {
     use super::*;
     use crate::limits::LimitWindow;
+    #[test]
+    fn transient_errors_keep_the_last_value_and_minute_time_without_a_failure_hint() {
+        use chrono::TimeZone;
+        let now = Local
+            .with_ymd_and_hms(2026, 10, 15, 14, 25, 36)
+            .single()
+            .unwrap()
+            .with_timezone(&Utc);
+        let mut m = Monitor::default();
+        m.succeeded(
+            RateLimits {
+                sampled_at: now,
+                secondary: LimitWindow {
+                    used_percent: Some(41),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            "CLI".into(),
+        );
+        let before = m.render_model(now, 60);
+        assert_eq!(before.refresh_label, "更新 14:25");
+        for failure in [Failure::Network, Failure::Timeout] {
+            m.failed(failure);
+            assert_eq!(m.render_model(now, 60), before);
+            assert!(!m.details(now, 60).contains("连接失败"));
+            assert!(!m.details(now, 60).contains("查询超时"));
+            assert!(m.details(now, 60).ends_with("最近成功：10-15 14:25"));
+            assert_eq!(m.failure, Some(failure));
+            assert_eq!(m.limits.as_ref().unwrap().sampled_at, now);
+        }
+        assert_eq!(
+            m.render_model(now + chrono::Duration::minutes(4), 60)
+                .refresh_label,
+            "数据过期"
+        );
+    }
     #[test]
     fn updating_preserves_the_display_until_a_new_sample_succeeds() {
         let now = Utc::now();
@@ -163,7 +213,7 @@ mod tests {
         assert_eq!(m.limits.as_ref().unwrap().sampled_at, next);
     }
     #[test]
-    fn failure_preserves_last_success_and_marks_stale() {
+    fn transient_failure_preserves_last_success_until_its_age_expires() {
         let mut m = Monitor::default();
         let now = Utc::now();
         m.succeeded(
@@ -179,8 +229,8 @@ mod tests {
         );
         m.failed(Failure::Network);
         assert_eq!(m.render_model(now, 60).percent_label, "66%");
-        assert_eq!(m.render_model(now, 60).refresh_label, "连接失败");
-        assert!(m.stale(now, 60));
+        assert!(m.render_model(now, 60).refresh_label.starts_with("更新 "));
+        assert!(!m.stale(now, 60));
         m.succeeded(
             RateLimits {
                 sampled_at: now,
@@ -214,9 +264,9 @@ mod tests {
     #[test]
     fn backoff_has_a_bound() {
         assert_eq!(retry_delay(60, 0), 60);
-        assert_eq!(retry_delay(60, 1), 120);
-        assert_eq!(retry_delay(60, 10), 480);
-        assert_eq!(retry_delay(300, 10), 600);
+        assert_eq!(retry_delay(60, 1), 5);
+        assert_eq!(retry_delay(60, 10), 300);
+        assert_eq!(retry_delay(300, 10), 300);
     }
     #[test]
     fn restores_a_removed_monitor_without_losing_negative_coordinates() {

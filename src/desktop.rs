@@ -844,7 +844,7 @@ unsafe fn command(app: &mut App, id: usize) {
 }
 unsafe fn write_diagnostics(app: &App) {
     // Local, minimal and credential-free diagnostics; not an external log or an API payload.
-    let payload = serde_json::json!({"version":env!("CARGO_PKG_VERSION"),"commit":env!("BUILD_COMMIT"),"dirty":env!("BUILD_DIRTY"),"status":app.monitor.details(Utc::now(),app.config.interval_secs),"remaining_percent":app.monitor.render_model(Utc::now(),app.config.interval_secs).remaining_percent,"refreshing":app.monitor.refreshing,"x":app.config.x,"y":app.config.y,"dpi":app.dpi,"interval_secs":app.config.interval_secs,"always_on_top":app.config.always_on_top,"visible":app.visible,"dragging":app.dragging,"closing":app.closing,"window_topmost":GetWindowLongPtrW(app.widget,GWL_EXSTYLE) as u32 & WS_EX_TOPMOST != 0});
+    let payload = serde_json::json!({"version":env!("CARGO_PKG_VERSION"),"commit":env!("BUILD_COMMIT"),"dirty":env!("BUILD_DIRTY"),"status":app.monitor.details(Utc::now(),app.config.interval_secs),"sampled_at":app.monitor.limits.as_ref().map(|l|l.sampled_at),"failure":app.monitor.failure.map(|f|f.label()),"remaining_percent":app.monitor.render_model(Utc::now(),app.config.interval_secs).remaining_percent,"refreshing":app.monitor.refreshing,"x":app.config.x,"y":app.config.y,"dpi":app.dpi,"interval_secs":app.config.interval_secs,"always_on_top":app.config.always_on_top,"visible":app.visible,"dragging":app.dragging,"closing":app.closing,"window_topmost":GetWindowLongPtrW(app.widget,GWL_EXSTYLE) as u32 & WS_EX_TOPMOST != 0});
     if let Some(parent) = app.path.parent() {
         let _ = std::fs::create_dir_all(parent);
         let _ = std::fs::write(parent.join("diagnostics.json"), payload.to_string());

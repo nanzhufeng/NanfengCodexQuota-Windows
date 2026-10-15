@@ -491,14 +491,15 @@ pub(super) unsafe fn update(app: &mut App) {
                 .unwrap_or_else(|| "--%".into()),
             DARK,
         );
-        let (status, color) = if let Some(f) = app.monitor.failure {
-            (f.label(), 0xffbc6808)
-        } else if app.monitor.stale(now, app.config.interval_secs) {
-            ("数据过期", 0xffbc6808)
-        } else if app.monitor.limits.is_some() {
-            ("已连接", GREEN)
+        let status = app.monitor.status_label(now, app.config.interval_secs);
+        let color = if app.monitor.actionable_failure().is_some()
+            || app.monitor.stale(now, app.config.interval_secs)
+        {
+            0xffbc6808
+        } else if status == "已连接" {
+            GREEN
         } else {
-            ("等待查询", MUTED)
+            MUTED
         };
         set_label(GetDlgItem(app.settings, 503), status, color);
         let reset = app
@@ -519,7 +520,7 @@ pub(super) unsafe fn update(app: &mut App) {
             .map(|l| {
                 l.sampled_at
                     .with_timezone(&Local)
-                    .format("%m月%d日  %H:%M:%S")
+                    .format("%m月%d日  %H:%M")
                     .to_string()
             })
             .unwrap_or_else(|| "尚无成功记录".into());

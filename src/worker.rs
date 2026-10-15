@@ -40,12 +40,14 @@ impl Worker {
             'worker: loop {
                 let _ = events.send(Event::Started);
                 notify();
+                let mut transient_failure = false;
                 let event = match provider.read() {
                     Ok((limits, source)) => {
                         failures = 0;
                         Event::Success(limits, source)
                     }
                     Err(f) => {
+                        transient_failure = matches!(f, Failure::Network | Failure::Timeout);
                         failures += 1;
                         Event::Failed(f)
                     }
@@ -57,7 +59,12 @@ impl Worker {
                     break;
                 }
                 notify();
-                let timeout = Duration::from_secs(retry_delay(config.interval_secs, failures));
+                let delay = if failures == 0 || transient_failure {
+                    retry_delay(config.interval_secs, failures)
+                } else {
+                    config.interval_secs.max(60)
+                };
+                let timeout = Duration::from_secs(delay);
                 match requests.recv_timeout(timeout) {
                     Ok(Command::Shutdown) | Err(RecvTimeoutError::Disconnected) => break,
                     Ok(Command::Configure(c)) => {

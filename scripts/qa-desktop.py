@@ -130,7 +130,7 @@ def control_text(identifier):
     u.GetWindowTextW(u.GetDlgItem(settings, identifier), buffer, 256)
     return buffer.value
 
-previous_status = diagnostics()["status"]
+previous_sample = diagnostics()["sampled_at"]
 previous_time = control_text(509)
 command(settings, 100)
 deadline = time.monotonic() + 20
@@ -140,12 +140,13 @@ while time.monotonic() < deadline:
     u.IsWindowEnabled.argtypes = [w.HWND]
     assert u.IsWindowEnabled(u.GetDlgItem(settings, 100)), "Routine query changed button appearance"
     current = diagnostics()
-    if not current["refreshing"] and current["status"] != previous_status:
+    if not current["refreshing"] and current["sampled_at"] != previous_sample:
         break
     time.sleep(0.02)
 else:
     raise AssertionError("New successful sample did not arrive")
-assert control_text(509) != previous_time, "Last success time did not advance"
+assert current["sampled_at"] != previous_sample, "Successful sample did not advance"
+assert control_text(509).count(":") == 1, "Visible time must only include hours and minutes"
 report["quiet_refresh"] = True
 report["updated_time"] = control_text(509)
 assert not u.GetDlgItem(settings, 302), "Removed feature-review navigation is still present"
